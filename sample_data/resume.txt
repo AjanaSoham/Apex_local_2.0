@@ -1,0 +1,12 @@
+Rahul Sharma
+
+Email: rahul@example.com
+
+Skills:
+Python, Java, SQL, Machine Learning, Git
+
+Education:
+B.Tech in Computer Science
+
+Experience:
+2 years of experience in software development.

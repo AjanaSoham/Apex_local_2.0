@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Candidate Match</title><style>
+body{font:16px system-ui;margin:0;background:#f5f7fb;color:#172033}main{max-width:920px;margin:3rem auto;padding:0 1rem}.card{background:white;border-radius:12px;padding:1.25rem;margin:1rem 0;box-shadow:0 1px 5px #dce1ec}input,textarea,select,button{font:inherit;padding:.65rem;margin:.3rem 0;width:100%;box-sizing:border-box}textarea{min-height:130px}button{background:#3056d3;color:white;border:0;border-radius:7px;font-weight:650;cursor:pointer}button.secondary{background:#eef1f8;color:#172033}#portal{display:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}pre{white-space:pre-wrap;background:#f6f8fc;padding:1rem;border-radius:8px}small{color:#586174}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head>
+<body><main><h1>Candidate Match</h1><p>Explainable resume matching for candidates and recruiters.</p>
+<section id="auth" class="grid"><div class="card"><h2>Create account</h2><input id="registerEmail" placeholder="Email" type="email"><input id="registerPassword" placeholder="Password (12+ characters)" type="password"><select id="registerRole"><option value="candidate">Candidate</option><option value="recruiter">Recruiter</option></select><button onclick="registerAccount()">Create account</button></div><div class="card"><h2>Sign in</h2><input id="loginEmail" placeholder="Email" type="email"><input id="loginPassword" placeholder="Password" type="password"><button onclick="login()">Sign in</button></div></section>
+<section id="portal"><div class="card"><button class="secondary" onclick="logout()">Sign out</button><h2 id="welcome"></h2><small id="status"></small></div>
+<div id="candidate" class="card"><h2>Candidate portal</h2><textarea id="resumeText" placeholder="Paste your resume text"></textarea><button onclick="saveResume()">Save resume</button><input id="applyJobId" type="number" placeholder="Job ID"><button onclick="apply()">Apply to job</button></div>
+<div id="recruiter" class="card"><h2>Recruiter portal</h2><input id="jobTitle" placeholder="Job title"><textarea id="jobDescription" placeholder="Job description"></textarea><button onclick="createJob()">Create job description</button><input id="candidateJobId" type="number" placeholder="Job ID"><button onclick="viewCandidates()">View ranked candidates</button></div></section><pre id="output">Ready.</pre></main>
+<script>
+let session=JSON.parse(localStorage.getItem('candidateMatchSession')||'null'),resumeId=localStorage.getItem('candidateMatchResumeId');
+const output=value=>document.querySelector('#output').textContent=typeof value==='string'?value:JSON.stringify(value,null,2);
+async function request(url,method='GET',body){const r=await fetch(url,{method,headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session.access_token}:{})},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!r.ok)throw Error(data.detail||'Request failed');return data}
+async function registerAccount(){try{output(await request('/auth/register','POST',{email:registerEmail.value,password:registerPassword.value,role:registerRole.value}))}catch(e){output(e.message)}}
+async function login(){try{session=await request('/auth/login','POST',{email:loginEmail.value,password:loginPassword.value});localStorage.setItem('candidateMatchSession',JSON.stringify(session));show()}catch(e){output(e.message)}}
+function show(){auth.style.display='none';portal.style.display='block';welcome.textContent=`${session.user.role==='candidate'?'Candidate':'Recruiter'} portal`;candidate.style.display=session.user.role==='candidate'?'block':'none';recruiter.style.display=session.user.role==='recruiter'?'block':'none';status.textContent=session.user.email}
+function logout(){localStorage.clear();location.reload()}
+async function saveResume(){try{const data=await request('/candidate/resumes','POST',{resume_text:resumeText.value});resumeId=data.resume_id;localStorage.setItem('candidateMatchResumeId',resumeId);output(data)}catch(e){output(e.message)}}
+async function apply(){try{output(await request(`/candidate/jobs/${applyJobId.value}/apply`,'POST',{resume_id:Number(resumeId)}))}catch(e){output(e.message)}}
+async function createJob(){try{output(await request('/recruiter/jobs','POST',{title:jobTitle.value,description:jobDescription.value}))}catch(e){output(e.message)}}
+async function viewCandidates(){try{output(await request(`/recruiter/jobs/${candidateJobId.value}/candidates`))}catch(e){output(e.message)}}
+if(session)show();
+</script></body></html>
