@@ -3,6 +3,7 @@
 import re
 
 from skill_extractor import extract_skills
+from resume_sections import extract_sections
 
 ACTION_WORDS = ("built", "developed", "implemented", "led", "designed", "deployed", "improved", "created", "managed", "reduced", "increased", "desarroll", "implement", "cré", "entwick")
 OUTCOME_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|users|clients|days|months|years|ms|x)(?![a-z])", re.IGNORECASE)
@@ -17,8 +18,17 @@ def score_evidence(skill: str, resume_text: str) -> dict[str, object]:
     outcome_support = any(OUTCOME_PATTERN.search(snippet) for snippet in snippets)
     score = 25 * bool(snippets) + 40 * action_support + 35 * outcome_support
     level = "strong" if score >= 75 else "moderate" if score >= 40 else "self-reported" if score else "none"
+    sections = extract_sections(resume_text)
+    section_types = {"skills": "SKILLS_SECTION", "projects": "PROJECT", "experience": "EXPERIENCE"}
+    evidence_sources = []
+    for section, source_type in section_types.items():
+        if skill in extract_skills(sections.get(section, "")):
+            evidence_sources.append({"type": source_type, "strength": "HIGH" if source_type in {"PROJECT", "EXPERIENCE"} and (action_support or outcome_support) else "LOW"})
+    if snippets and not evidence_sources:
+        evidence_sources.append({"type": "RESUME_TEXT", "strength": "MEDIUM" if action_support else "LOW"})
     return {
         "snippets": snippets,
+        "evidenceSources": evidence_sources,
         "support_score": score,
         "support_level": level,
         "requires_external_verification": bool(snippets),

@@ -1,203 +1,261 @@
-"""FastAPI interface for explainable resume-to-job matching."""
+"""Internal AI service contract. Application data belongs to the Spring Boot gateway."""
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.responses import FileResponse
+import re
+import base64
+import tempfile
+import hmac
+import os
 from pathlib import Path
+from typing import Any
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from candidate_service import analyze_candidate, chatbot_reply, rank_candidates
-from match_model import train_model
+from candidate_service import analyze_candidate
+from candidate_service import chatbot_reply, rank_candidates
+from embedding_service import active_model_name, generate_embedding
+from jd_skill_extractor import extract_jd_skills
 from language_service import detect_language
-from store import (add_application, add_job, add_resume, candidates_for_job, current_user,
-                   get_job, get_resume, initialize, jobs_for_recruiter, login, register)
+from resume_sections import extract_sections
+from skill_extractor import extract_skills
+from parsers import extract_text
+from resume_extractor import extract_candidate_name, extract_email, extract_phone, clean_text
+from structured_extractor import (
+    calculate_years_of_experience,
+    extract_education_entries,
+    extract_experience_entries,
+    extract_project_entries,
+)
 
-app = FastAPI(title="Candidate Match API", version="1.0.0")
-auth_scheme = HTTPBearer()
-
-
-@app.on_event("startup")
-def startup() -> None:
-    initialize()
-
-
-def authenticated_user(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> dict:
-    try:
-        return current_user(credentials.credentials)
-    except PermissionError as error:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(error)) from error
+app = FastAPI(title="Resume Matcher AI Service", version="1.1.0")
 
 
-def require_role(role: str, user: dict) -> None:
-    if user["role"] != role:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"This action requires the {role} role.")
+@app.middleware("http")
+async def protect_internal_api(request: Request, call_next):
+    """Require a gateway-held service key outside local development."""
+    expected_key = os.getenv("AI_SERVICE_API_KEY", "")
+    if request.url.path.startswith("/ai/v1") and expected_key:
+        supplied_key = request.headers.get("X-AI-Service-Key", "")
+        if not hmac.compare_digest(supplied_key, expected_key):
+            return JSONResponse(status_code=401, content={"detail": "Invalid AI service key."})
+    return await call_next(request)
+
+
+class ResumeParseRequest(BaseModel):
+    resume_text: str | None = None
+    file_base64: str | None = None
+    document_type: str = Field(default="txt", pattern="^(pdf|docx|txt)$")
+    file_name: str = ""
+
+
+class JobAnalysisRequest(BaseModel):
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
+class EmbeddingRequest(BaseModel):
+    text: str = Field(min_length=1)
+    language: str | None = None
 
 
 class MatchRequest(BaseModel):
+    resume_id: int | None = None
+    job_id: int | None = None
     resume_text: str = Field(min_length=1)
     job_description: str = Field(min_length=1)
     candidate_name: str = ""
 
 
-class Candidate(BaseModel):
+class AnalysisRequest(BaseModel):
+    analysis: dict[str, Any]
+
+
+class InterviewRequest(BaseModel):
+    resume_text: str = Field(min_length=1)
+    job_description: str = Field(min_length=1)
+    role: str = ""
+
+
+class CandidateRequest(BaseModel):
     resume_text: str = Field(min_length=1)
     candidate_name: str = ""
 
 
 class RankRequest(BaseModel):
-    candidates: list[Candidate] = Field(min_length=1)
+    candidates: list[CandidateRequest] = Field(min_length=1, max_length=100)
     job_description: str = Field(min_length=1)
 
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
-    analysis: dict
-
-
-class TrainingExample(BaseModel):
-    resume_text: str | None = None
-    job_description: str | None = None
-    skill_match: float | None = Field(default=None, ge=0, le=100)
-    semantic_similarity: float | None = Field(default=None, ge=0, le=100)
-    evidence_score: float | None = Field(default=None, ge=0, le=100)
-    label: float = Field(ge=0, le=100, description="Human-reviewed match label, not a hiring decision")
-
-
-class TrainRequest(BaseModel):
-    examples: list[TrainingExample] = Field(min_length=8)
-
-
-class RegisterRequest(BaseModel):
-    email: str = Field(min_length=3)
-    password: str = Field(min_length=12)
-    role: str = Field(pattern="^(candidate|recruiter)$")
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class ResumeRequest(BaseModel):
     resume_text: str = Field(min_length=1)
+    job_description: str = Field(min_length=1)
+    candidate_name: str = ""
 
 
-class JobRequest(BaseModel):
-    title: str = Field(min_length=2)
-    description: str = Field(min_length=1)
+def _importance(skill: str, description: str) -> str:
+    lowered = description.lower()
+    if any(marker in lowered for marker in (f"required {skill.lower()}", f"must have {skill.lower()}", f"mandatory {skill.lower()}")):
+        return "HIGH"
+    if any(marker in lowered for marker in ("preferred", "nice to have", "bonus")):
+        return "LOW"
+    return "MEDIUM"
 
 
-class ApplyRequest(BaseModel):
-    resume_id: int = Field(gt=0)
+def _resume_payload(text: str) -> dict[str, Any]:
+    text = clean_text(text)
+    if not text:
+        raise ValueError("No readable text could be extracted from this resume.")
+    sections, skills, language = extract_sections(text), extract_skills(text), detect_language(text)
+    email, phone = extract_email(text), extract_phone(text)
+    name = extract_candidate_name(text)
+    experience = extract_experience_entries(text)
+    education = extract_education_entries(text)
+    years_of_experience = calculate_years_of_experience(experience)
+    return {"status": "COMPLETED", "language": language["language"], "confidence": language["confidence"],
+            "resume": {"name": name, "email": email, "phone": phone,
+                       "skills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "confidence": 0.9} for skill in skills],
+                       "education": education, "experience": experience, "years_of_experience": years_of_experience,
+                       "projects": extract_project_entries(text), "certifications": sections.get("certifications", ""), "links": {}},
+            "warnings": [] if language["supported"] else ["Language could not be identified confidently; review extraction output."], "parserVersion": "1.1.0"}
+
+
+def _parse_request_text(request: ResumeParseRequest) -> str:
+    if request.resume_text and request.resume_text.strip():
+        return request.resume_text
+    if not request.file_base64:
+        raise ValueError("Provide resume_text or file_base64.")
+    try:
+        contents = base64.b64decode(request.file_base64, validate=True)
+    except ValueError as error:
+        raise ValueError("file_base64 must be valid base64 document data.") from error
+    suffix = f".{request.document_type}"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
+        temporary.write(contents)
+        temporary_path = Path(temporary.name)
+    try:
+        return extract_text(str(temporary_path))
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _match_payload(request: MatchRequest) -> dict[str, Any]:
+    analysis = analyze_candidate(request.resume_text, request.job_description, request.candidate_name)
+    scores, skills = analysis["scores"], analysis["skills"]
+    return {"resumeId": request.resume_id, "jobId": request.job_id, "overallScore": scores["overall"], "semanticScore": scores["semantic_similarity"], "skillScore": scores["skill_match"], "experienceScore": scores["evidence_score"], "evidenceScore": scores["evidence_score"], "matchedSkills": skills["matched_skills"], "missingSkills": skills["missing_skills"], "evidence": analysis["evidence"], "explanation": analysis["explanation"]["summary"], "modelVersion": analysis["explanation"]["score_model"]}
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "service": "ai-service", "version": app.version}
 
 
-@app.get("/", include_in_schema=False)
-def landing_page():
-    return FileResponse(Path(__file__).with_name("portal.html"))
+@app.post("/ai/v1/parse-resume-file")
+async def parse_resume_file(file: UploadFile = File(...)):
+    allowed_types = {
+        "application/pdf": "pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    }
 
+    document_type = allowed_types.get(file.content_type or "")
+    if document_type is None:
+        raise HTTPException(
+            status_code=415,
+            detail="Only PDF and DOCX files are supported.",
+        )
 
-@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
-def create_account(request: RegisterRequest):
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
+
+    with tempfile.NamedTemporaryFile(
+        suffix=f".{document_type}",
+        delete=False,
+    ) as temporary:
+        temporary.write(contents)
+        temporary_path = Path(temporary.name)
+
     try:
-        return register(request.email, request.password, request.role)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        extracted_text = extract_text(str(temporary_path))
+        return _resume_payload(extracted_text)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
-@app.post("/auth/login")
-def create_session(request: LoginRequest):
-    try:
-        return login(request.email, request.password)
-    except PermissionError as error:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(error)) from error
+@app.post("/ai/v1/analyze-jd")
+def analyze_jd(request: JobAnalysisRequest):
+    skills = extract_jd_skills(request.description)
+    return {"title": request.title, "requiredSkills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "importance": _importance(skill, request.description)} for skill in skills], "experienceRequired": None, "language": detect_language(request.description)["language"], "modelVersion": "skill-taxonomy-v1"}
 
 
-@app.get("/me")
-def me(user: dict = Depends(authenticated_user)):
-    return user
+@app.post("/ai/v1/generate-embedding")
+def generate_embedding_endpoint(request: EmbeddingRequest):
+    vector = generate_embedding(request.text)
+    return {"embedding": vector, "dimension": len(vector), "modelName": active_model_name(), "language": request.language or detect_language(request.text)["language"]}
 
 
-@app.post("/candidate/resumes", status_code=status.HTTP_201_CREATED)
-def upload_resume(request: ResumeRequest, user: dict = Depends(authenticated_user)):
-    require_role("candidate", user)
-    language = detect_language(request.resume_text)["language"]
-    return {"resume_id": add_resume(user["id"], request.resume_text, language), "language": language}
-
-
-@app.post("/recruiter/jobs", status_code=status.HTTP_201_CREATED)
-def create_job(request: JobRequest, user: dict = Depends(authenticated_user)):
-    require_role("recruiter", user)
-    return {"job_id": add_job(user["id"], request.title, request.description)}
-
-
-@app.get("/recruiter/jobs")
-def recruiter_jobs(user: dict = Depends(authenticated_user)):
-    require_role("recruiter", user)
-    return {"jobs": jobs_for_recruiter(user["id"])}
-
-
-@app.post("/candidate/jobs/{job_id}/apply", status_code=status.HTTP_201_CREATED)
-def apply(job_id: int, request: ApplyRequest, user: dict = Depends(authenticated_user)):
-    require_role("candidate", user)
-    job, resume = get_job(job_id), get_resume(request.resume_id, user["id"])
-    if job is None or resume is None:
-        raise HTTPException(status_code=404, detail="Job or resume was not found.")
-    analysis = analyze_candidate(resume["resume_text"], job["description"], user["email"])
-    try:
-        application_id = add_application(job_id, user["id"], request.resume_id, analysis)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    return {"application_id": application_id, "analysis": analysis}
-
-
-@app.get("/recruiter/jobs/{job_id}/candidates")
-def ranked_candidates(job_id: int, user: dict = Depends(authenticated_user)):
-    require_role("recruiter", user)
-    job = get_job(job_id)
-    if job is None or job["recruiter_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Job was not found.")
-    return {"job_id": job_id, "candidates": candidates_for_job(job_id)}
-
-
-@app.post("/match")
+@app.post("/ai/v1/match")
 def match(request: MatchRequest):
     try:
-        return analyze_candidate(request.resume_text, request.job_description, request.candidate_name)
+        return _match_payload(request)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.post("/rank")
+@app.post("/ai/v1/rank")
 def rank(request: RankRequest):
-    return {"candidates": rank_candidates([item.model_dump() for item in request.candidates], request.job_description)}
+    try:
+        candidates = [
+            {"resume_text": candidate.resume_text, "candidate_name": candidate.candidate_name}
+            for candidate in request.candidates
+        ]
+        results = rank_candidates(candidates, request.job_description)
+        return {"candidates": results, "count": len(results)}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.post("/chat")
+@app.post("/ai/v1/chat")
 def chat(request: ChatRequest):
     try:
-        return {"reply": chatbot_reply(request.question, request.analysis)}
-    except (KeyError, TypeError) as error:
-        raise HTTPException(status_code=422, detail="analysis must be a response from /match") from error
-
-
-@app.post("/train")
-def train(request: TrainRequest):
-    """Calibrate the local score model from independently human-labeled examples."""
-    try:
-        examples = []
-        for item in request.examples:
-            record = item.model_dump()
-            if record["resume_text"] and record["job_description"]:
-                analysis = analyze_candidate(record["resume_text"], record["job_description"])
-                record.update(analysis["scores"])
-            if any(record[key] is None for key in ("skill_match", "semantic_similarity", "evidence_score")):
-                raise ValueError("Each example needs resume_text + job_description, or all three precomputed feature scores.")
-            examples.append(record)
-        return train_model(examples)
+        analysis = analyze_candidate(
+            request.resume_text,
+            request.job_description,
+            request.candidate_name,
+        )
+        return {
+            "answer": chatbot_reply(request.question, analysis),
+            "candidateName": request.candidate_name,
+            "modelVersion": analysis["explanation"]["score_model"],
+        }
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/ai/v1/explain-match")
+def explain_match(request: AnalysisRequest):
+    try:
+        if "overallScore" in request.analysis:
+            missing = request.analysis.get("missingSkills", [])
+            recommendation = "Strong match - recommend structured interview." if request.analysis["overallScore"] >= 75 else "Review missing requirements in a screening call."
+            return {"explanation": request.analysis["explanation"], "recommendation": recommendation, "verificationNotice": "Evidence is self-reported until verified by an authorized process."}
+        return {"explanation": request.analysis["explanation"], "recommendation": request.analysis["recommendation"], "verificationNotice": "Evidence is self-reported until verified by an authorized process."}
+    except KeyError as error:
+        raise HTTPException(status_code=422, detail="analysis must be an AI match analysis object") from error
+
+
+@app.post("/ai/v1/recommend")
+def recommend(request: AnalysisRequest):
+    try:
+        missing = request.analysis.get("missingSkills", request.analysis.get("skills", {}).get("missing_skills", []))
+        return {"recommendations": [{"type": "SKILL_GAP", "content": f"Build demonstrable experience with {skill}."} for skill in missing], "modelVersion": "rules-v1"}
+    except KeyError as error:
+        raise HTTPException(status_code=422, detail="analysis must include skills.missing_skills") from error
+
+
+@app.post("/ai/v1/interview")
+def interview(request: InterviewRequest):
+    analysis = analyze_candidate(request.resume_text, request.job_description)
+    return {"role": request.role, "questions": analysis["interview_questions"], "modelVersion": "rules-v1"}

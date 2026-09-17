@@ -1,1 +1,7 @@
-venv
+.env
+ml/.env
+__pycache__/
+*.py[cod]
+ml/candidate_match.db
+ml/trained_match_model.json
+doc_review/

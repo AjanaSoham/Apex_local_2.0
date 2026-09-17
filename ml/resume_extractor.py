@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 from pprint import pprint
 
-from structured_extractor import extract_experience_blocks
+from structured_extractor import extract_education_entries, extract_experience_entries
 from parsers import extract_text
 from resume_sections import extract_sections
 from skill_extractor import extract_skills
@@ -61,7 +61,30 @@ def extract_candidate_name(text: str) -> str:
         "contact",
     ]
 
-    for line in lines[:20]:
+    ignored_exact = {
+        "senior secondary",
+        "secondary",
+        "engineering student",
+        "computer science student",
+        "about me",
+        "education",
+        "technical skills",
+        "languages known",
+        "hobbies",
+    }
+
+    # Many PDF layouts place the name after the contact details. Prefer a
+    # nearby all-caps header over arbitrary two-word lines in education.
+    for index, line in enumerate(lines):
+        if line.lower() in ignored_exact or "@" in line or re.search(r"\d", line):
+            continue
+        if not re.fullmatch(r"[A-Z][A-Z .'-]{2,}", line):
+            continue
+        words = line.split()
+        if 2 <= len(words) <= 4:
+            return line.title()
+
+    for line in lines[:30]:
 
         line_lower = line.lower()
 
@@ -77,8 +100,11 @@ def extract_candidate_name(text: str) -> str:
         if line.startswith(("*", "-", "•")):
             continue
 
+        line = re.sub(r"^(?:name|candidate name)\s*:\s*", "", line, flags=re.IGNORECASE).strip()
         words = line.split()
 
+        if line_lower in ignored_exact:
+            continue
         if 2 <= len(words) <= 4:
             return line
 
@@ -165,11 +191,9 @@ def extract_resume(file_path: str) -> dict:
 
         "sections": sections,
 
-        "experience": extract_experience_blocks(
-            cleaned_resume_text.splitlines()
-        ),
+        "experience": extract_experience_entries(cleaned_resume_text),
 
-        "education": [],
+        "education": extract_education_entries(cleaned_resume_text),
 
         "raw_text": cleaned_resume_text,
     }
