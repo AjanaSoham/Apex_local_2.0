@@ -263,6 +263,8 @@ def test_lm_studio():
         }
 
     try:
+        base_url = os.getenv("LM_STUDIO_BASE_URL")
+
         response = requests.get(
             f"{base_url.rstrip('/')}/models",
             timeout=20
