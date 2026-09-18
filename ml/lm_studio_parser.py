@@ -311,3 +311,187 @@ def parse_resume_with_lm_studio(text: str) -> dict[str, Any]:
         return normalize_resume(_json_from_content(content))
     except ValueError as error:
         raise RuntimeError(f"LM Studio returned invalid resume JSON: {error}") from error
+
+
+def parse_resume_from_image_with_lm_studio(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+) -> dict[str, Any]:
+    """Send a resume image directly to LM Studio's vision API and return a parsed resume dict.
+
+    No OCR step is involved — the LLM reads the image natively.
+    """
+    import base64
+
+    if not image_bytes:
+        raise ValueError("Cannot send empty image to LM Studio.")
+
+    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if not url:
+        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
+    timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "90"))
+
+    schema = {
+        "detected_language": "en",
+        "name": "",
+        "email": "",
+        "phone": "",
+        "skills": [{"name": "", "confidence": 0.0}],
+        "education": [{"degree": "", "institution": "", "end_year": "", "grade": ""}],
+        "experience": [{
+            "company": "", "job_title": "", "location": "",
+            "responsibilities": [], "technologies": [],
+            "start_date": "", "end_date": "",
+        }],
+        "years_of_experience": 0,
+        "projects": [{"name": "", "description": ""}],
+        "certifications": "",
+        "links": {},
+    }
+    prompt = (
+        "Extract structured information from the resume shown in this image. "
+        "Return ONLY one valid JSON object matching the schema below. "
+        "Set detected_language to the BCP-47 code of the language the resume is written in "
+        "(e.g. \"en\" for English, \"fr\" for French, \"es\" for Spanish, \"de\" for German). "
+        "Do not infer employment from an objective or project. "
+        "Do not put employers in education. Education must contain only real degrees/schools; "
+        "use end_year only, never start_year. Preserve missing values as empty strings/lists. "
+        "Ignore standalone Spring unless the resume explicitly says Spring Boot. "
+        "Keep responsibilities concise: maximum 8 items per job, maximum 180 characters each. "
+        "Keep technologies to the 20 most relevant items. Do not copy the entire resume into JSON.\n\n"
+        f"SCHEMA:\n{json.dumps(schema, ensure_ascii=True)}"
+    )
+
+    data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode()}"
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise resume information extraction service."},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    },
+                ],
+                "temperature": 0,
+                "max_tokens": 6000,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "resume_extraction",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "detected_language": {"type": "string"},
+                                "name": {"type": "string"},
+                                "email": {"type": "string"},
+                                "phone": {"type": "string"},
+                                "skills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "confidence": {"type": "number"},
+                                        },
+                                        "required": ["name", "confidence"],
+                                    },
+                                },
+                                "education": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "degree": {"type": "string"},
+                                            "institution": {"type": "string"},
+                                            "end_year": {"type": "string"},
+                                            "grade": {"type": "string"},
+                                        },
+                                        "required": ["degree", "institution", "end_year", "grade"],
+                                    },
+                                },
+                                "experience": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "company": {"type": "string"},
+                                            "job_title": {"type": "string"},
+                                            "location": {"type": "string"},
+                                            "responsibilities": {"type": "array", "items": {"type": "string"}},
+                                            "technologies": {"type": "array", "items": {"type": "string"}},
+                                            "additional_information": {"type": "array", "items": {"type": "string"}},
+                                            "start_date": {"type": "string"},
+                                            "end_date": {"type": "string"},
+                                        },
+                                        "required": [
+                                            "company", "job_title", "location", "responsibilities",
+                                            "technologies", "additional_information", "start_date", "end_date",
+                                        ],
+                                    },
+                                },
+                                "years_of_experience": {"type": "number"},
+                                "projects": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["name", "description"],
+                                    },
+                                },
+                                "certifications": {"type": "string"},
+                                "links": {"type": "object"},
+                            },
+                            "required": [
+                                "detected_language", "name", "email", "phone", "skills", "education", "experience",
+                                "years_of_experience", "projects", "certifications", "links",
+                            ],
+                        },
+                    },
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        content = message.get("content") or ""
+        if not content.strip():
+            raise ValueError("LM Studio returned no answer content.")
+        if payload["choices"][0].get("finish_reason") == "length":
+            raise ValueError(
+                "LM Studio truncated the JSON response; reduce image size or increase max_tokens."
+            )
+    except requests.RequestException as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
+    try:
+        raw = _json_from_content(content)
+        detected_language = raw.get("detected_language", "en") or "en"
+        normalized = normalize_resume(raw)
+        normalized["detected_language"] = detected_language
+        return normalized
+    except ValueError as error:
+        raise RuntimeError(f"LM Studio returned invalid resume JSON: {error}") from error

@@ -344,21 +344,6 @@ def extract_text_from_docx_local(file_path: str) -> str:
     return "\n".join(extracted_text).strip()
 
 
-def extract_text_from_image_local(file_path: str) -> str:
-    """Extract text from a JPG/JPEG image using OCR (requires pytesseract + Pillow)."""
-    if pytesseract is None or Image is None:
-        raise ValueError(
-            "Image files require OCR dependencies (pytesseract and Pillow) "
-            "which are not installed."
-        )
-    image = Image.open(file_path).convert("RGB")
-    text = pytesseract.image_to_string(image)
-    result = text.strip()
-    if not result:
-        raise ValueError("OCR could not extract any text from the image.")
-    return result
-
-
 def extract_text(file_path: str) -> str:
     path = Path(file_path)
     extension = path.suffix.lower()
@@ -395,11 +380,8 @@ def extract_text(file_path: str) -> str:
             errors="replace"
         ).strip()
 
-    elif extension in {".jpg", ".jpeg"}:
-        return extract_text_from_image_local(file_path)
-
     else:
         raise ValueError(
             "Unsupported file type. "
-            "Only PDF, DOCX, TXT, and JPG/JPEG files are supported."
+            "Only PDF, DOCX, and TXT files are supported."
         )

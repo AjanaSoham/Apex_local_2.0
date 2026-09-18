@@ -16,8 +16,8 @@ from candidate_service import analyze_candidate
 from candidate_service import chatbot_reply, rank_candidates
 from embedding_service import active_model_name, generate_embedding
 from jd_skill_extractor import extract_jd_skills
-from language_service import detect_language
-from lm_studio_parser import parse_resume_with_lm_studio
+from language_service import detect_language, is_english
+from lm_studio_parser import parse_resume_with_lm_studio, parse_resume_from_image_with_lm_studio
 from parsers import extract_text
 from resume_extractor import clean_text
 
@@ -103,9 +103,14 @@ def _resume_payload(text: str) -> dict[str, Any]:
     text = clean_text(text)
     if not text:
         raise ValueError("No readable text could be extracted from this resume.")
+    if not is_english(text):
+        lang = detect_language(text)
+        raise ValueError(
+            f"This service only accepts resumes written in English. "
+            f"Detected language: {lang.upper()}."
+        )
     parsed = parse_resume_with_lm_studio(text)
-    language = detect_language(text)
-    return {"status": "COMPLETED", "language": language["language"],
+    return {"status": "COMPLETED", "language": "en",
             "resume": parsed,
             "warnings": [],
             "parserVersion": "1.3.0-lm-studio"}
@@ -143,25 +148,49 @@ def health():
 
 @app.post("/ai/v1/parse-resume-file")
 async def parse_resume_file(file: UploadFile = File(...)):
-    allowed_types = {
+    image_types = {"image/jpeg", "image/jpg"}
+    text_types = {
         "application/pdf": "pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-        "image/jpeg": "jpg",
-        "image/jpg": "jpg",
         "text/plain": "txt",
     }
 
-    document_type = allowed_types.get(file.content_type or "")
-    if document_type is None:
+    content_type = file.content_type or ""
+
+    if content_type not in image_types and content_type not in text_types:
         raise HTTPException(
             status_code=415,
-            detail="Only PDF, DOCX, JPG/JPEG, and TXT files are supported.",
+            detail="Only PDF, DOCX, TXT, and JPG/JPEG files are supported.",
         )
 
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=422, detail="The uploaded file is empty.")
 
+    # --- Image path: send raw bytes directly to LM Studio vision API ---
+    if content_type in image_types:
+        try:
+            parsed = parse_resume_from_image_with_lm_studio(contents, mime_type=content_type)
+            detected_lang = parsed.pop("detected_language", "en") or "en"
+            if detected_lang.lower() != "en":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"This service only accepts resumes written in English. "
+                        f"Detected language: {detected_lang.upper()}."
+                    ),
+                )
+            return {"status": "COMPLETED", "language": "en",
+                    "resume": parsed,
+                    "warnings": [],
+                    "parserVersion": "1.3.0-lm-studio"}
+        except HTTPException:
+            raise
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    # --- Text/document path: extract text first, then LLM ---
+    document_type = text_types[content_type]
     with tempfile.NamedTemporaryFile(
         suffix=f".{document_type}",
         delete=False,
@@ -172,7 +201,6 @@ async def parse_resume_file(file: UploadFile = File(...)):
     try:
         extracted_text = extract_text(str(temporary_path))
         return _resume_payload(extracted_text)
-        # return extracted_text
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     finally:
