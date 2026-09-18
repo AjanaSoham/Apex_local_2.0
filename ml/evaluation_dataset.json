@@ -1,4 +1,0 @@
-[
-  {"id": "strong-python", "resume_text": "Python SQL Docker FastAPI machine learning Git", "job_description": "Python developer with SQL, Docker, FastAPI and Git", "expected_min_score": 70},
-  {"id": "weak-java", "resume_text": "Java Spring developer", "job_description": "Python engineer with Docker, Kubernetes and machine learning", "expected_max_score": 45}
-]
