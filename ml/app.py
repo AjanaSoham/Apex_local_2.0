@@ -162,20 +162,19 @@ async def parse_resume_file(file: UploadFile = File(...)):
 # Service 2 — JD Skill Extractor
 # ---------------------------------------------------------------------------
 
-class JobDescriptionRequest(BaseModel):
-    description: str = Field(min_length=1, description="Raw job description text written by the recruiter.")
-
-
 @app.post("/ai/v1/analyze-jd")
-def analyze_jd(request: JobDescriptionRequest):
+async def analyze_jd(request: Request):
     """Extract skills and hiring requirements from a raw job description.
 
-    The LLM identifies every skill, tool, or competency mentioned and tags each
-    with an importance level (HIGH / MEDIUM / LOW) and a category
-    (technical / tool / soft / domain).
+    Accepts plain text (Content-Type: text/plain). The backend sends the
+    job description as-is — no JSON encoding required.
     """
+    body = await request.body()
+    text = body.decode("utf-8", errors="replace").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Request body must contain the job description text.")
     try:
-        result = extract_jd_skills_with_lm_studio(request.description)
+        result = extract_jd_skills_with_lm_studio(text)
         return {
             "status": "COMPLETED",
             "modelVersion": "2.0.0-lm-studio",
