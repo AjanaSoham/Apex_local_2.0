@@ -1,0 +1,293 @@
+ALEXANDER MATTHEW CARTER Senior Software Engineer | Machine Learning
+Engineer | Cloud Solutions Architect
+
+Contact Information Email: alex.carter.resume@example.com Phone:
++1-555-014-7283 Location: Bengaluru, Karnataka, India LinkedIn:
+https://www.linkedin.com/in/alex-carter-example GitHub:
+https://github.com/alexcarter-example Portfolio: https://alexcarter.dev
+
+PROFESSIONAL SUMMARY
+
+Results-driven software and machine learning engineer with more than 8
+years of experience designing, developing, testing, deploying, and
+maintaining scalable software systems, intelligent document-processing
+pipelines, recommendation systems, and cloud-native applications. Strong
+background in Python, Java, TypeScript, SQL, machine learning, natural
+language processing, computer vision, large language model integration,
+data engineering, distributed systems, and DevOps.
+
+Experienced in converting ambiguous business requirements into reliable
+production systems. Demonstrated ability to lead cross-functional teams,
+mentor junior engineers, design RESTful APIs, optimize model inference,
+improve application performance, and build secure cloud deployments.
+Skilled in developing AI-powered products involving resume parsing,
+invoice extraction, semantic search, document classification, chatbot
+systems, and job recommendation engines.
+
+TECHNICAL SKILLS
+
+Programming Languages: Python, Java, C++, JavaScript, TypeScript, SQL,
+Bash, HTML5, CSS3
+
+Python Ecosystem: FastAPI, Flask, Django, Pydantic, Requests, NumPy,
+Pandas, SciPy, Scikit-learn, PyTorch, TensorFlow, Keras, OpenCV, Pillow,
+PyMuPDF, python-docx, BeautifulSoup, Celery, pytest
+
+Machine Learning and AI: Supervised Learning, Unsupervised Learning,
+Regression, Classification, Clustering, Feature Engineering, Model
+Evaluation, Cross-Validation, Hyperparameter Tuning, Natural Language
+Processing, Named Entity Recognition, Text Classification, Semantic
+Similarity, Sentence Embeddings, Vector Search, Retrieval-Augmented
+Generation, Prompt Engineering, Large Language Models, Generative AI,
+Computer Vision, OCR, Image Classification, Transfer Learning,
+Explainable AI
+
+Deep Learning: Neural Networks, Convolutional Neural Networks, Recurrent
+Neural Networks, LSTM, GRU, Transformers, Attention Mechanisms, BERT,
+Sentence Transformers, Fine-Tuning, Quantization, GPU Inference, ONNX
+
+LLM and AI Tools: OpenAI-Compatible APIs, LM Studio, Ollama, Hugging
+Face Transformers, Hugging Face Hub, LangChain, LlamaIndex,
+SentenceTransformers, FAISS, ChromaDB, pgvector
+
+Web Development: REST APIs, GraphQL, FastAPI, Flask, Spring Boot, React,
+Next.js, Node.js, Express.js, JWT Authentication, OAuth 2.0, WebSockets,
+Microservices, API Gateway, Swagger, OpenAPI
+
+Databases: PostgreSQL, MySQL, MongoDB, Redis, SQLite, Elasticsearch,
+pgvector, Database Indexing, Query Optimization, Transactions, Data
+Modeling
+
+Cloud and DevOps: Docker, Docker Compose, Kubernetes, GitHub Actions,
+Jenkins, Terraform, Linux, Nginx, AWS EC2, AWS S3, AWS Lambda, AWS RDS,
+Google Cloud Run, Google Cloud Storage, Microsoft Azure, Render, Vercel,
+CI/CD, Monitoring, Logging, Infrastructure as Code
+
+Software Engineering: Object-Oriented Programming, Data Structures and
+Algorithms, System Design, Design Patterns, SOLID Principles, Agile,
+Scrum, Test-Driven Development, Code Review, Documentation, Debugging,
+Performance Optimization, Secure Coding
+
+PROFESSIONAL EXPERIENCE
+
+Senior Machine Learning Engineer Nexora Intelligent Systems Pvt. Ltd.,
+Bengaluru, India June 2022 – Present
+
+-   Designed and implemented an AI-powered document intelligence
+    platform for extracting structured information from resumes,
+    invoices, contracts, purchase orders, and application forms.
+-   Developed production-grade Python services using FastAPI, Pydantic,
+    PyTorch, Scikit-learn, and Hugging Face Transformers.
+-   Built a resume parsing pipeline supporting PDF, DOCX, TXT, and
+    image-based documents.
+-   Implemented document classification, text extraction, OCR fallback,
+    section detection, skill extraction, skill normalization, education
+    extraction, work experience extraction, and project extraction.
+-   Integrated transformer-based embeddings and vector similarity search
+    to compare resumes against job descriptions.
+-   Developed a semantic matching engine that calculated weighted scores
+    using skill overlap, semantic similarity, experience relevance,
+    education alignment, and project relevance.
+-   Created explainability features that showed matched skills, missing
+    skills, supporting resume evidence, and reasons behind
+    recommendation scores.
+-   Integrated local and cloud-hosted large language models through
+    OpenAI-compatible APIs.
+-   Built an abstraction layer supporting LM Studio, Ollama, and hosted
+    inference providers without changing application business logic.
+-   Designed prompts that forced models to return schema-constrained
+    JSON and implemented validation and retry logic for malformed
+    responses.
+-   Reduced average document-processing latency by 38 percent through
+    asynchronous processing, caching, batching, and optimized PDF
+    extraction.
+-   Created Docker images for ML services and deployed APIs using cloud
+    container platforms.
+-   Implemented automated unit tests, integration tests, API tests, and
+    regression tests for extraction and matching modules.
+-   Mentored five junior developers in Python, REST API design, machine
+    learning fundamentals, Git workflows, and debugging.
+-   Collaborated with product managers, frontend developers, data
+    engineers, and QA engineers in two-week Agile sprints.
+
+Machine Learning Engineer DataVista Analytics, Pune, India January 2020
+– May 2022
+
+-   Developed classification and regression models for customer
+    analytics, fraud detection, and document categorization.
+-   Built NLP pipelines for cleaning, tokenization, lemmatization,
+    stop-word removal, TF-IDF, word embeddings, and transformer
+    embeddings.
+-   Trained and evaluated models using Logistic Regression, Random
+    Forest, XGBoost, Support Vector Machines, K-Means, and neural
+    networks.
+-   Improved fraud detection recall by 21 percent while maintaining
+    acceptable precision through feature engineering and threshold
+    optimization.
+-   Implemented image classification models using TensorFlow and
+    PyTorch.
+-   Used transfer learning with ResNet and EfficientNet for visual
+    document and product image classification.
+-   Created data preprocessing pipelines using Pandas and NumPy.
+-   Developed model evaluation reports containing accuracy, precision,
+    recall, F1-score, ROC-AUC, confusion matrices, and calibration
+    metrics.
+-   Built internal dashboards for monitoring model drift, data quality,
+    and prediction distributions.
+-   Wrote SQL queries and stored procedures for extracting and
+    aggregating data from PostgreSQL and MySQL.
+-   Containerized services with Docker and integrated automated testing
+    into GitHub Actions.
+-   Participated in production incident response, root-cause analysis,
+    and performance optimization.
+
+Software Engineer BlueOrbit Technologies, Hyderabad, India July 2017 –
+December 2019
+
+-   Developed Java and Spring Boot microservices for a customer
+    relationship management platform.
+-   Designed REST APIs for customer onboarding, document upload,
+    authentication, notifications, and reporting.
+-   Implemented JWT-based authentication and role-based authorization.
+-   Built React dashboards for internal operations teams.
+-   Designed PostgreSQL schemas, indexes, constraints, and optimized
+    complex SQL queries.
+-   Integrated Redis caching and asynchronous job processing.
+-   Created unit and integration tests using JUnit, Mockito, and
+    Testcontainers.
+-   Participated in code reviews, sprint planning, backlog refinement,
+    and technical documentation.
+-   Migrated selected services from a monolithic architecture to
+    independently deployable microservices.
+-   Improved API response times by approximately 30 percent through
+    query optimization and caching.
+
+SELECTED PROJECTS
+
+1.  AI Resume Parser and Job Matcher
+
+Description: Developed an intelligent resume-processing platform that
+accepts PDF, DOCX, TXT, and image files and converts unstructured resume
+content into structured JSON.
+
+Key Features: - Multi-format document ingestion - PDF and DOCX text
+extraction - OCR fallback for scanned resumes - Resume section
+identification - Personal information extraction - Education and work
+experience extraction - Technical and soft-skill extraction - Skill
+normalization and synonym mapping - Job description parsing -
+Sentence-transformer embeddings - Semantic resume-job matching -
+Missing-skill detection - Evidence-based explanations - Candidate
+ranking and recommendation - Interview question generation - AI chatbot
+for candidate queries - Error handling and fallback models
+
+Technologies: Python, FastAPI, PyMuPDF, python-docx, Tesseract OCR,
+OpenCV, PyTorch, SentenceTransformers, PostgreSQL, pgvector, Docker, LM
+Studio, React
+
+2.  Intelligent Invoice and Receipt Analyzer
+
+Description: Created a document analysis system that extracts vendor
+details, invoice numbers, dates, tax values, line items, and totals from
+invoices and receipts.
+
+Technologies: Python, FastAPI, OCR, OpenCV, PyMuPDF, Pydantic,
+PostgreSQL, React, Docker
+
+3.  Medical Image Classification Research Prototype
+
+Description: Built a CNN-based image classification prototype for
+classifying medical images into multiple categories. Implemented dataset
+preparation, augmentation, model training, validation, testing,
+confusion matrix analysis, and model checkpoint saving.
+
+Technologies: Python, PyTorch, torchvision, NumPy, Matplotlib, CUDA, GPU
+acceleration
+
+4.  Semantic Document Search Engine
+
+Description: Developed a semantic search engine that converted documents
+into vector embeddings and retrieved relevant passages based on user
+queries.
+
+Technologies: Python, SentenceTransformers, FAISS, PostgreSQL, pgvector,
+FastAPI
+
+5.  Cloud-Native Expense Management Platform
+
+Description: Built a multi-user expense management application with
+authentication, expense categorization, receipt uploads, monthly
+reports, and role-based access control.
+
+Technologies: Java, Spring Boot, React, PostgreSQL, Redis, Docker, AWS
+
+EDUCATION
+
+Master of Technology in Artificial Intelligence and Data Science Indian
+Institute of Technology, Bengaluru 2015 – 2017 CGPA: 8.7/10
+
+Bachelor of Technology in Computer Science and Engineering National
+Institute of Technology, Karnataka 2011 – 2015 CGPA: 8.4/10
+
+CERTIFICATIONS
+
+-   AWS Certified Machine Learning – Specialty
+-   Google Professional Machine Learning Engineer
+-   Microsoft Certified: Azure AI Engineer Associate
+-   TensorFlow Developer Certificate
+-   Deep Learning Specialization – Coursera
+-   Machine Learning Engineering for Production – Coursera
+-   Kubernetes and Cloud Native Associate
+-   Professional Scrum Master I
+
+PUBLICATIONS AND RESEARCH
+
+-   “Transformer-Based Semantic Matching for Intelligent Recruitment
+    Systems,” International Conference on Applied AI, 2023.
+-   “Robust OCR Pipelines for Noisy Business Documents,” Journal of
+    Document Intelligence, 2022.
+-   “Efficient Transfer Learning for Multi-Class Document Image
+    Classification,” Workshop on Applied Computer Vision, 2021.
+
+ACHIEVEMENTS
+
+-   Received the Engineering Excellence Award in 2024 for leading the
+    development of an AI document intelligence platform.
+-   Reduced cloud inference expenses by 27 percent through model
+    quantization and optimized batching.
+-   Led a team that won first place in an internal AI innovation
+    challenge.
+-   Delivered technical workshops on Python, machine learning, REST
+    APIs, and Docker.
+-   Open-source contributor to projects involving document parsing and
+    vector search.
+
+LEADERSHIP AND COMMUNITY
+
+-   Mentor for early-career software engineers.
+-   Volunteer instructor for weekend programming workshops.
+-   Organizer of monthly machine learning reading groups.
+-   Contributor to internal engineering standards and coding guidelines.
+-   Reviewer for technical articles and internal architecture proposals.
+
+ADDITIONAL INFORMATION
+
+Languages: English, Hindi, Kannada
+
+Work Authorization: Authorized to work in India.
+
+Preferred Roles: Senior Machine Learning Engineer, AI Engineer, NLP
+Engineer, Applied Scientist, Machine Learning Platform Engineer, Backend
+Engineer, Python Developer
+
+Preferred Locations: Bengaluru, Hyderabad, Pune, Mumbai, Delhi NCR,
+Remote
+
+Availability: 30 days notice period
+
+Professional Interests: Document Intelligence, Generative AI, NLP,
+Computer Vision, MLOps, Cloud Architecture, Search Systems, Developer
+Tools, Responsible AI
+
+REFERENCES
+
+Available upon request.
