@@ -660,3 +660,238 @@ def extract_jd_skills_with_lm_studio(text: str) -> dict[str, Any]:
         return _normalize_jd(_json_from_content(content))
     except ValueError as error:
         raise RuntimeError(f"LM Studio returned invalid JD JSON: {error}") from error
+
+
+# ---------------------------------------------------------------------------
+# Candidate–Job Matcher
+# ---------------------------------------------------------------------------
+
+def _normalize_match(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate and clean the raw LLM match output. Enforces the experience hard gate."""
+
+    def _importance(v: object) -> str:
+        s = _string(v).upper()
+        return s if s in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
+
+    experience_met: bool = bool(value.get("experienceMet", True))
+    education_met: bool = bool(value.get("educationMet", True))
+
+    # Hard gate: if experience is not met, force score to 0.
+    raw_score = value.get("overallScore", 0)
+    try:
+        overall_score = max(0, min(100, int(round(float(raw_score)))))
+    except (TypeError, ValueError):
+        overall_score = 0
+    if not experience_met:
+        overall_score = 0
+
+    matched_skills = []
+    for item in value.get("matchedSkills", []):
+        if not isinstance(item, dict):
+            continue
+        name = _string(item.get("name"))
+        if not name:
+            continue
+        try:
+            confidence = max(0.0, min(1.0, float(item.get("candidateConfidence", 0.8))))
+        except (TypeError, ValueError):
+            confidence = 0.8
+        matched_skills.append({
+            "name": name,
+            "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
+            "importance": _importance(item.get("importance")),
+            "candidateConfidence": confidence,
+        })
+
+    missing_skills = []
+    for item in value.get("missingSkills", []):
+        if not isinstance(item, dict):
+            continue
+        name = _string(item.get("name"))
+        if not name:
+            continue
+        missing_skills.append({
+            "name": name,
+            "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
+            "importance": _importance(item.get("importance")),
+        })
+
+    return {
+        "overallScore": overall_score,
+        "experienceMet": experience_met,
+        "educationMet": education_met,
+        "matchedSkills": matched_skills,
+        "missingSkills": missing_skills,
+        "summary": _string(value.get("summary")),
+    }
+
+
+def match_candidate_with_lm_studio(
+    candidate: dict[str, Any],
+    job_requirements: dict[str, Any],
+) -> dict[str, Any]:
+    """Score a candidate against job requirements using the LLM.
+
+    ``candidate``        — the ``resume`` object returned by the parser.
+    ``job_requirements`` — the full response from ``extract_jd_skills_with_lm_studio``.
+
+    Returns overallScore (0–100), experienceMet, educationMet,
+    matchedSkills, missingSkills, and a plain-English summary.
+    Experience is a hard gate: if not met, overallScore is forced to 0.
+    """
+    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if not url:
+        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
+    timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "90"))
+
+    # Build compact summaries so we don't blast the context window.
+    candidate_summary = {
+        "name": candidate.get("name", ""),
+        "yearsOfExperience": candidate.get("years_of_experience", 0),
+        "education": [
+            {"degree": e.get("degree", ""), "institution": e.get("institution", "")}
+            for e in candidate.get("education", [])
+        ],
+        "skills": [
+            {"name": s.get("name", ""), "confidence": s.get("confidence", 0.8)}
+            for s in candidate.get("skills", [])
+        ],
+    }
+
+    job_summary = {
+        "jobTitle": job_requirements.get("jobTitle", ""),
+        "experienceRequired": job_requirements.get("experienceRequired", ""),
+        "educationRequired": job_requirements.get("educationRequired", ""),
+        "skills": [
+            {
+                "name": s.get("name", ""),
+                "importance": s.get("importance", "MEDIUM"),
+                "category": s.get("category", "technical"),
+            }
+            for s in job_requirements.get("skills", [])
+        ],
+    }
+
+    output_schema = {
+        "experienceMet": True,
+        "educationMet": True,
+        "overallScore": 0,
+        "matchedSkills": [
+            {"name": "", "importance": "HIGH | MEDIUM | LOW", "candidateConfidence": 0.0}
+        ],
+        "missingSkills": [
+            {"name": "", "importance": "HIGH | MEDIUM | LOW"}
+        ],
+        "summary": "",
+    }
+
+    prompt = (
+        "You are a hiring intelligence system. Score how well the CANDIDATE matches the JOB REQUIREMENTS.\n\n"
+        "SCORING RULES:\n"
+        "1. Experience gate (hard rule): if the candidate's yearsOfExperience is LESS than the minimum "
+        "required years, set experienceMet=false and overallScore=0. No further scoring needed.\n"
+        "2. If experience IS met, compute overallScore (0–100) as follows:\n"
+        "   - Skills (70%): for each required skill, check if it appears in the candidate's skills. "
+        "Weight matched skills by their importance (HIGH=3, MEDIUM=2, LOW=1) and multiply by the "
+        "candidate's confidence for that skill. Divide by the maximum possible weighted score.\n"
+        "   - Education (15%): full marks if candidate meets educationRequired, partial if related, 0 if unrelated or not stated.\n"
+        "   - Experience surplus (15%): proportional bonus for exceeding the minimum experience requirement.\n"
+        "3. matchedSkills: required skills the candidate has (include candidateConfidence from their profile).\n"
+        "4. missingSkills: required skills the candidate is missing entirely.\n"
+        "5. summary: one concise sentence explaining the result (mention experience gap if not met).\n\n"
+        f"CANDIDATE:\n{json.dumps(candidate_summary, ensure_ascii=True)}\n\n"
+        f"JOB REQUIREMENTS:\n{json.dumps(job_summary, ensure_ascii=True)}\n\n"
+        f"Return ONLY a JSON object matching this schema:\n{json.dumps(output_schema, ensure_ascii=True)}"
+    )
+
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise candidate evaluation service."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+                "max_tokens": 3000,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "match_result",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "experienceMet": {"type": "boolean"},
+                                "educationMet": {"type": "boolean"},
+                                "overallScore": {"type": "number"},
+                                "matchedSkills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "importance": {
+                                                "type": "string",
+                                                "enum": ["HIGH", "MEDIUM", "LOW"],
+                                            },
+                                            "candidateConfidence": {"type": "number"},
+                                        },
+                                        "required": ["name", "importance", "candidateConfidence"],
+                                    },
+                                },
+                                "missingSkills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "importance": {
+                                                "type": "string",
+                                                "enum": ["HIGH", "MEDIUM", "LOW"],
+                                            },
+                                        },
+                                        "required": ["name", "importance"],
+                                    },
+                                },
+                                "summary": {"type": "string"},
+                            },
+                            "required": [
+                                "experienceMet", "educationMet", "overallScore",
+                                "matchedSkills", "missingSkills", "summary",
+                            ],
+                        },
+                    },
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        content = message.get("content") or ""
+        if not content.strip():
+            raise ValueError("LM Studio returned no answer content.")
+        if payload["choices"][0].get("finish_reason") == "length":
+            raise ValueError(
+                "LM Studio truncated the match JSON; increase max_tokens."
+            )
+    except requests.RequestException as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
+    try:
+        return _normalize_match(_json_from_content(content))
+    except ValueError as error:
+        raise RuntimeError(f"LM Studio returned invalid match JSON: {error}") from error

@@ -17,6 +17,7 @@ from lm_studio_parser import (
     parse_resume_with_lm_studio,
     parse_resume_from_image_with_lm_studio,
     extract_jd_skills_with_lm_studio,
+    match_candidate_with_lm_studio,
 )
 from parsers import extract_text, ScannedPDFError, pdf_to_page_images
 
@@ -184,6 +185,40 @@ async def analyze_jd(request: Request):
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Unexpected error during JD analysis: {error}") from error
+
+
+# ---------------------------------------------------------------------------
+# Service 3 — Candidate–Job Matcher
+# ---------------------------------------------------------------------------
+
+class MatchRequest(BaseModel):
+    candidate: dict[str, Any] = Field(
+        description="The resume object from /ai/v1/parse-resume-file (the inner 'resume' field)."
+    )
+    jobRequirements: dict[str, Any] = Field(
+        description="The full response from /ai/v1/analyze-jd."
+    )
+
+
+@app.post("/ai/v1/match")
+def match(request: MatchRequest):
+    """Score a candidate against job requirements.
+
+    Experience is a hard gate — if the candidate does not meet the minimum
+    years required, overallScore is forced to 0 regardless of skills.
+    Otherwise the score is weighted: skills 70%, education 15%, experience surplus 15%.
+    """
+    try:
+        result = match_candidate_with_lm_studio(request.candidate, request.jobRequirements)
+        return {
+            "status": "COMPLETED",
+            "modelVersion": "2.0.0-lm-studio",
+            **result,
+        }
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Unexpected error during matching: {error}") from error
 
 
 # ---------------------------------------------------------------------------
