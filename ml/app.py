@@ -41,7 +41,7 @@ async def protect_internal_api(request: Request, call_next):
 class ResumeParseRequest(BaseModel):
     resume_text: str | None = None
     file_base64: str | None = None
-    document_type: str = Field(default="txt", pattern="^(pdf|docx|txt)$")
+    document_type: str = Field(default="txt", pattern="^(pdf|docx|txt|jpg|jpeg)$")
     file_name: str = ""
 
 
@@ -105,9 +105,9 @@ def _resume_payload(text: str) -> dict[str, Any]:
         raise ValueError("No readable text could be extracted from this resume.")
     parsed = parse_resume_with_lm_studio(text)
     language = detect_language(text)
-    return {"status": "COMPLETED", "language": language["language"], "confidence": language["confidence"],
+    return {"status": "COMPLETED", "language": language["language"],
             "resume": parsed,
-            "warnings": [] if language["supported"] else ["Language could not be identified confidently."],
+            "warnings": [],
             "parserVersion": "1.3.0-lm-studio"}
 
 
@@ -146,13 +146,16 @@ async def parse_resume_file(file: UploadFile = File(...)):
     allowed_types = {
         "application/pdf": "pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "text/plain": "txt",
     }
 
     document_type = allowed_types.get(file.content_type or "")
     if document_type is None:
         raise HTTPException(
             status_code=415,
-            detail="Only PDF and DOCX files are supported.",
+            detail="Only PDF, DOCX, JPG/JPEG, and TXT files are supported.",
         )
 
     contents = await file.read()
