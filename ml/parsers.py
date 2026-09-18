@@ -348,7 +348,13 @@ def extract_text(file_path: str) -> str:
     path = Path(file_path)
     extension = path.suffix.lower()
 
-    if extension in {".pdf", ".docx"} and os.getenv("UNSTRUCTURED_API_KEY"):
+    # LM Studio now handles structured resume parsing. Unstructured remains an
+    # opt-in text/OCR provider for deployments that explicitly enable it.
+    if (
+        extension in {".pdf", ".docx"}
+        and os.getenv("UNSTRUCTURED_ENABLED", "false").lower() in {"1", "true", "yes"}
+        and os.getenv("UNSTRUCTURED_API_KEY")
+    ):
         try:
             extracted_text = _elements_to_text(
                 extract_elements_from_unstructured(file_path)

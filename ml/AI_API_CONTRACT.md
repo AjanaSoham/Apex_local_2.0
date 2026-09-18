@@ -25,8 +25,11 @@ skills, experience entries (`company`, `job_title`, `location`, and
 `location`). Missing skills indicate only that a skill was not detected in the
 supplied text.
 
-For Unstructured Transform API accounts, `UNSTRUCTURED_API_URL` should point to
-the `/api/v1` base URL. The service creates a partition job, polls it, downloads
-the output elements, and converts their text into the existing parser pipeline.
+Structured resume extraction uses the OpenAI-compatible LM Studio endpoint
+configured with `LM_STUDIO_URL` and `LM_STUDIO_MODEL`. The service first
+extracts document text locally, sends that text to LM Studio, validates the
+returned JSON, and uses the deterministic parser if LM Studio is unavailable.
+Unstructured Transform API is an optional legacy text/OCR provider and is only
+used when `UNSTRUCTURED_ENABLED=true`.
 
 Stable response schemas for backend integration are in `ml/schemas/`. Treat an incompatible schema change as a versioned API change.

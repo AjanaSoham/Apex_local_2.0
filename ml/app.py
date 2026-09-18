@@ -16,16 +16,9 @@ from candidate_service import chatbot_reply, rank_candidates
 from embedding_service import active_model_name, generate_embedding
 from jd_skill_extractor import extract_jd_skills
 from language_service import detect_language
-from resume_sections import extract_sections
-from skill_extractor import extract_skills
+from lm_studio_parser import parse_resume_with_lm_studio
 from parsers import extract_text
-from resume_extractor import extract_candidate_name, extract_email, extract_phone, clean_text
-from structured_extractor import (
-    calculate_years_of_experience,
-    extract_education_entries,
-    extract_experience_entries,
-    extract_project_entries,
-)
+from resume_extractor import clean_text
 
 app = FastAPI(title="Resume Matcher AI Service", version="1.1.0")
 
@@ -106,18 +99,12 @@ def _resume_payload(text: str) -> dict[str, Any]:
     text = clean_text(text)
     if not text:
         raise ValueError("No readable text could be extracted from this resume.")
-    sections, skills, language = extract_sections(text), extract_skills(text), detect_language(text)
-    email, phone = extract_email(text), extract_phone(text)
-    name = extract_candidate_name(text)
-    experience = extract_experience_entries(text)
-    education = extract_education_entries(text)
-    years_of_experience = calculate_years_of_experience(experience)
+    parsed = parse_resume_with_lm_studio(text)
+    language = detect_language(text)
     return {"status": "COMPLETED", "language": language["language"], "confidence": language["confidence"],
-            "resume": {"name": name, "email": email, "phone": phone,
-                       "skills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "confidence": 0.9} for skill in skills],
-                       "education": education, "experience": experience, "years_of_experience": years_of_experience,
-                       "projects": extract_project_entries(text), "certifications": sections.get("certifications", ""), "links": {}},
-            "warnings": [] if language["supported"] else ["Language could not be identified confidently; review extraction output."], "parserVersion": "1.1.0"}
+            "resume": parsed,
+            "warnings": [] if language["supported"] else ["Language could not be identified confidently."],
+            "parserVersion": "1.3.0-lm-studio"}
 
 
 def _parse_request_text(request: ResumeParseRequest) -> str:
@@ -178,6 +165,7 @@ async def parse_resume_file(file: UploadFile = File(...)):
     try:
         extracted_text = extract_text(str(temporary_path))
         return _resume_payload(extracted_text)
+        # return extracted_text
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     finally:

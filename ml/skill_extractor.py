@@ -33,7 +33,6 @@ SKILL_ALIASES = {
     "node js": "Node.js",
 
     "spring boot": "Spring Boot",
-    "spring": "Spring",
 
     "sql": "SQL",
     "mysql": "MySQL",

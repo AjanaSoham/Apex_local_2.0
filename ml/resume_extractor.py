@@ -20,13 +20,32 @@ def extract_email(text: str) -> str:
 
 
 def extract_phone(text: str) -> str:
-    pattern = r"(?<!\d)\+?\d[\d\s().-]{8,}\d(?!\d)"
-
-    match = re.search(pattern, text)
-
-    if match:
-        return match.group(0).strip()
-
+    # Search line-by-line so dates, CGPAs, and adjacent PDF columns cannot be
+    # combined into a single false phone number.
+    pattern = re.compile(r"(?<!\d)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,5}\)?[\s.-]?)?\d{3,5}[\s.-]?\d{3,5}(?!\d)")
+    lines = text.splitlines()
+    prioritized = [
+        line for line in lines
+        if re.search(r"(?i)\b(?:phone|mobile|contact\s*(?:no|number)?|tel)\b|\+\s*\d", line)
+    ]
+    for line in prioritized + lines:
+        digit_groups = re.findall(r"\d+", line)
+        digits = "".join(digit_groups)
+        if 10 <= len(digits) <= 15 and not (
+            len(digit_groups) > 1
+            and all(len(group) == 4 for group in digit_groups)
+            and not re.search(r"(?i)\b(?:phone|mobile|contact|tel)\b|\+\s*\d", line)
+        ):
+            # Prefer the final 10 digits for Indian numbers when OCR has
+            # separated the country code or misplaced punctuation.
+            if len(digits) > 10 and digits.startswith(("91", "011")):
+                digits = digits[-10:]
+            return digits
+        for match in pattern.finditer(line):
+            value = match.group(0).strip(" .-")
+            digits = re.sub(r"\D", "", value)
+            if 10 <= len(digits) <= 15:
+                return value
     return ""
 
 
@@ -68,12 +87,60 @@ def extract_candidate_name(text: str) -> str:
         "computer science student",
         "about me",
         "education",
+        "academic qualification",
+        "qualifications",
+        "project",
+        "aim",
+        "strength",
+        "personal details",
+        "declaration",
+        "contact information",
+        "profile overview",
+        "academic qualification",
+        "skills",
+        "projects",
+        "hobbies",
+        "signature",
+        "learning programs",
+        "miscellaneous",
+        "leadership / position of responsibility",
         "technical skills",
         "languages known",
         "hobbies",
     }
 
+    # Contact rows are a strong anchor even when the PDF places the name
+    # after the header or contact details.
+    for index, line in enumerate(lines):
+        if not re.search(r"(?i)\b(?:phone|email|linkedin|github|contact)\b|\+\s*\d", line):
+            continue
+        for candidate in reversed(lines[max(0, index - 4):index + 1]):
+            candidate = candidate.strip(" .:-")
+            words = candidate.split()
+            if (
+                2 <= len(words) <= 4
+                and all(re.fullmatch(r"[A-Za-z][A-Za-z.'-]*", word) for word in words)
+                and candidate.lower() not in ignored_exact
+                and not any(
+                    marker in candidate.lower()
+                    for marker in ("learning programs", "study jam", "college", "university", "school")
+                )
+            ):
+                return " ".join(word.capitalize() for word in words)
+
     # Many PDF layouts place the name after the contact details. Prefer a
+    # nearby name-like line over arbitrary headings.
+    for index, line in enumerate(lines[:40]):
+        if line.lower() in ignored_exact or "@" in line or re.search(r"\d", line):
+            continue
+        if re.search(r"(?i)\b(?:college|university|school|engineering|computer science|student|address|profile|overview|information)\b", line):
+            continue
+        words = line.split()
+        if 2 <= len(words) <= 4 and all(re.fullmatch(r"[A-Za-z][A-Za-z.'-]*", word) for word in words):
+            if index == 0 or any(re.search(r"(?i)\b(?:contact|email|phone|address)\b", candidate) for candidate in lines[index:index + 8]):
+                return " ".join(word.capitalize() for word in words)
+
+    # Prefer a nearby all-caps header over arbitrary two-word lines in education.
     # nearby all-caps header over arbitrary two-word lines in education.
     for index, line in enumerate(lines):
         if line.lower() in ignored_exact or "@" in line or re.search(r"\d", line):
@@ -127,6 +194,9 @@ def clean_text(text: str) -> str:
     text = text.replace("«", "*")
     text = text.replace("¢", "*")
     text = text.replace("•", "*")
+    text = text.replace("\ufffd", "'")
+    text = text.replace("\u00b7", "|")
+    text = text.replace("\u2013", "-")
 
     cleaned_lines = []
 

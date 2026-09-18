@@ -1,0 +1,313 @@
+import json
+import os
+import re
+from typing import Any
+
+import requests
+from dotenv import load_dotenv
+
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1/models"
+DEFAULT_MODEL = "google/gemma-4-e4b"
+
+
+def _json_from_content(content: str) -> dict[str, Any]:
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"\s*```$", "", content)
+
+    decoder = json.JSONDecoder()
+    try:
+        value, _ = decoder.raw_decode(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+        if not match:
+            raise ValueError("LM Studio returned no JSON object.")
+        try:
+            value = json.loads(match.group(0))
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"LM Studio returned malformed JSON at line {error.lineno}, "
+                f"column {error.colno}: {error.msg}"
+            ) from error
+
+    if not isinstance(value, dict):
+        raise ValueError("LM Studio returned JSON with an invalid root type.")
+    return value
+
+
+def _string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _list_of_strings(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_string(item) for item in value if _string(item)]
+
+
+def _normalize_skill(value: object) -> dict[str, Any] | None:
+    if isinstance(value, str):
+        name = value.strip()
+        confidence = 0.8
+    elif isinstance(value, dict):
+        name = _string(value.get("name") or value.get("skill"))
+        confidence = value.get("confidence", 0.8)
+    else:
+        return None
+    if not name:
+        return None
+    try:
+        confidence = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        confidence = 0.8
+    return {
+        "name": name,
+        "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
+        "confidence": confidence,
+    }
+
+
+def _normalize_education(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    entries = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entries.append({
+            "degree": _string(item.get("degree") or item.get("qualification")),
+            "institution": _string(item.get("institution") or item.get("school")),
+            "end_year": _string(item.get("end_year") or item.get("year") or item.get("graduation_year")),
+            "grade": _string(item.get("grade") or item.get("cgpa") or item.get("percentage")),
+        })
+    return [entry for entry in entries if any(entry.values())]
+
+
+def _normalize_experience(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    entries = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entry = {
+            "company": _string(item.get("company") or item.get("employer")),
+            "job_title": _string(item.get("job_title") or item.get("title") or item.get("role")),
+            "location": _string(item.get("location")),
+            "responsibilities": _list_of_strings(item.get("responsibilities") or item.get("duties")),
+            "technologies": _list_of_strings(item.get("technologies") or item.get("tools")),
+            "additional_information": _list_of_strings(item.get("additional_information")),
+        }
+        for key in ("start_date", "end_date"):
+            value = _string(item.get(key))
+            if value:
+                entry[key] = value
+        if any(entry[key] for key in ("company", "job_title", "location", "responsibilities")):
+            entries.append(entry)
+    return entries
+
+
+def _normalize_projects(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    projects = []
+    for item in value:
+        if isinstance(item, str):
+            if item.strip():
+                projects.append({"name": item.strip(), "description": ""})
+        elif isinstance(item, dict):
+            name = _string(item.get("name") or item.get("title"))
+            description = _string(item.get("description") or item.get("details"))
+            if name or description:
+                projects.append({"name": name, "description": description})
+    return projects
+
+
+def normalize_resume(value: dict[str, Any]) -> dict[str, Any]:
+    resume = value.get("resume") if isinstance(value.get("resume"), dict) else value
+    skills = []
+    for item in resume.get("skills", []):
+        normalized = _normalize_skill(item)
+        if normalized and normalized["normalizedName"] != "spring":
+            skills.append(normalized)
+
+    return {
+        "name": _string(resume.get("name") or resume.get("candidate_name")),
+        "email": _string(resume.get("email")),
+        "phone": _string(resume.get("phone")),
+        "skills": skills,
+        "education": _normalize_education(resume.get("education")),
+        "experience": _normalize_experience(resume.get("experience")),
+        "years_of_experience": resume.get("years_of_experience", 0),
+        "projects": _normalize_projects(resume.get("projects")),
+        "certifications": _string(resume.get("certifications")),
+        "links": resume.get("links") if isinstance(resume.get("links"), dict) else {},
+    }
+
+
+def parse_resume_with_lm_studio(text: str) -> dict[str, Any]:
+    if not text.strip():
+        raise ValueError("Cannot send empty resume text to LM Studio.")
+
+    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if not url:
+        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
+    timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "90"))
+    schema = {
+        "name": "",
+        "email": "",
+        "phone": "",
+        "skills": [{"name": "", "confidence": 0.0}],
+        "education": [{"degree": "", "institution": "", "end_year": "", "grade": ""}],
+        "experience": [{
+            "company": "", "job_title": "", "location": "",
+            "responsibilities": [], "technologies": [],
+            "start_date": "", "end_date": "",
+        }],
+        "years_of_experience": 0,
+        "projects": [{"name": "", "description": ""}],
+        "certifications": "",
+        "links": {},
+    }
+    prompt = (
+        "Extract structured information from this resume. Return ONLY one valid JSON object "
+        "matching the schema below. Do not infer employment from an objective or project. "
+        "Do not put employers in education. Education must contain only real degrees/schools; "
+        "use end_year only, never start_year. Preserve missing values as empty strings/lists. "
+        "Ignore standalone Spring unless the resume explicitly says Spring Boot. "
+        "Keep responsibilities concise: maximum 8 items per job, maximum 180 characters each. "
+        "Keep technologies to the 20 most relevant items. Do not copy the entire resume into JSON.\n\n"
+        f"SCHEMA:\n{json.dumps(schema, ensure_ascii=True)}\n\n"
+        f"RESUME TEXT:\n{text[:40000]}"
+    )
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise resume information extraction service."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+                "max_tokens": 6000,
+                "chat_template_kwargs": {"enable_thinking": False},
+                # LM Studio supports "text" and "json_schema" here, but not the
+                # OpenAI-only "json_object" value. The prompt still requires a
+                # single JSON object, which _json_from_content validates.
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "resume_extraction",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "name": {"type": "string"},
+                                "email": {"type": "string"},
+                                "phone": {"type": "string"},
+                                "skills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "confidence": {"type": "number"},
+                                        },
+                                        "required": ["name", "confidence"],
+                                    },
+                                },
+                                "education": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "degree": {"type": "string"},
+                                            "institution": {"type": "string"},
+                                            "end_year": {"type": "string"},
+                                            "grade": {"type": "string"},
+                                        },
+                                        "required": ["degree", "institution", "end_year", "grade"],
+                                    },
+                                },
+                                "experience": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "company": {"type": "string"},
+                                            "job_title": {"type": "string"},
+                                            "location": {"type": "string"},
+                                            "responsibilities": {"type": "array", "items": {"type": "string"}},
+                                            "technologies": {"type": "array", "items": {"type": "string"}},
+                                            "additional_information": {"type": "array", "items": {"type": "string"}},
+                                            "start_date": {"type": "string"},
+                                            "end_date": {"type": "string"},
+                                        },
+                                        "required": [
+                                            "company", "job_title", "location", "responsibilities",
+                                            "technologies", "additional_information", "start_date", "end_date",
+                                        ],
+                                    },
+                                },
+                                "years_of_experience": {"type": "number"},
+                                "projects": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["name", "description"],
+                                    },
+                                },
+                                "certifications": {"type": "string"},
+                                "links": {"type": "object"},
+                            },
+                            "required": [
+                                "name", "email", "phone", "skills", "education", "experience",
+                                "years_of_experience", "projects", "certifications", "links",
+                            ],
+                        },
+                    },
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        content = message.get("content") or ""
+        if not content.strip():
+            raise ValueError("LM Studio returned no answer content.")
+        if payload["choices"][0].get("finish_reason") == "length":
+            raise ValueError(
+                "LM Studio truncated the JSON response; reduce resume size or increase max_tokens."
+            )
+    except requests.RequestException as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
+    try:
+        return normalize_resume(_json_from_content(content))
+    except ValueError as error:
+        raise RuntimeError(f"LM Studio returned invalid resume JSON: {error}") from error
