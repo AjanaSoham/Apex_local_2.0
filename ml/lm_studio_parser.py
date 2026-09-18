@@ -314,16 +314,18 @@ def parse_resume_with_lm_studio(text: str) -> dict[str, Any]:
 
 
 def parse_resume_from_image_with_lm_studio(
-    image_bytes: bytes,
+    image_bytes: bytes | list[bytes],
     mime_type: str = "image/jpeg",
 ) -> dict[str, Any]:
-    """Send a resume image directly to LM Studio's vision API and return a parsed resume dict.
+    """Send a resume image (or list of page images) directly to LM Studio's vision API.
 
-    No OCR step is involved — the LLM reads the image natively.
+    Accepts a single ``bytes`` object (JPG upload) or a ``list[bytes]`` (scanned PDF pages).
+    No OCR step is involved — the LLM reads the images natively.
     """
     import base64
 
-    if not image_bytes:
+    pages: list[bytes] = [image_bytes] if isinstance(image_bytes, bytes) else image_bytes
+    if not pages or not any(pages):
         raise ValueError("Cannot send empty image to LM Studio.")
 
     base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
@@ -364,7 +366,10 @@ def parse_resume_from_image_with_lm_studio(
         f"SCHEMA:\n{json.dumps(schema, ensure_ascii=True)}"
     )
 
-    data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode()}"
+    image_content = [
+        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64.b64encode(page).decode()}"}}
+        for page in pages
+    ]
     response = None
     try:
         response = requests.post(
@@ -377,7 +382,7 @@ def parse_resume_from_image_with_lm_studio(
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": data_url}},
+                            *image_content,
                             {"type": "text", "text": prompt},
                         ],
                     },

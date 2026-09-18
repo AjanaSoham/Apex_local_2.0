@@ -281,39 +281,28 @@ def extract_text_from_pdf_local(file_path: str) -> str:
     if len(normal_text) >= 50:
         return normal_text
 
-    # Otherwise, use OCR when it is installed.
-    if pytesseract is None or Image is None:
-        raise ValueError(
-            "This scanned PDF needs OCR, but the optional OCR "
-            "dependencies are unavailable."
-        )
+    # Not enough text — this is a scanned PDF. Signal the caller to use vision.
+    raise ScannedPDFError(file_path)
 
-    print("Little or no text found. Running OCR...")
 
-    ocr_text = []
+class ScannedPDFError(Exception):
+    """Raised when a PDF yields too little text for LLM parsing (likely scanned)."""
+    def __init__(self, file_path: str):
+        super().__init__(f"PDF appears to be scanned or image-based: {file_path}")
+        self.file_path = file_path
 
-    # Reopen the PDF because the document was closed above.
+
+def pdf_to_page_images(file_path: str, max_pages: int = 5, scale: float = 2.0) -> list[bytes]:
+    """Render each page of a PDF to a JPEG (bytes) using pymupdf. No Tesseract needed."""
     document = pymupdf.open(file_path)
-
-    for page_number, page in enumerate(document):
-        print(f"Running OCR on page {page_number + 1}...")
-
-        pixmap = page.get_pixmap(
-            matrix=pymupdf.Matrix(2, 2)
-        )
-
-        image = Image.frombytes(
-            "RGB",
-            [pixmap.width, pixmap.height],
-            pixmap.samples
-        )
-
-        page_text = pytesseract.image_to_string(image)
-        ocr_text.append(page_text)
-
+    images: list[bytes] = []
+    for page in document:
+        if len(images) >= max_pages:
+            break
+        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale))
+        images.append(pixmap.tobytes("jpeg"))
     document.close()
-
-    return "\n".join(ocr_text).strip()
+    return images
 
 def extract_text_from_docx_local(file_path: str) -> str:
     document = Document(file_path)

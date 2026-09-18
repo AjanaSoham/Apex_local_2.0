@@ -18,7 +18,7 @@ from embedding_service import active_model_name, generate_embedding
 from jd_skill_extractor import extract_jd_skills
 from language_service import detect_language, is_english
 from lm_studio_parser import parse_resume_with_lm_studio, parse_resume_from_image_with_lm_studio
-from parsers import extract_text
+from parsers import extract_text, ScannedPDFError, pdf_to_page_images
 from resume_extractor import clean_text
 
 app = FastAPI(title="Resume Matcher AI Service", version="1.1.0")
@@ -201,6 +201,28 @@ async def parse_resume_file(file: UploadFile = File(...)):
     try:
         extracted_text = extract_text(str(temporary_path))
         return _resume_payload(extracted_text)
+    except ScannedPDFError:
+        # Scanned/image-based PDF — render pages and send to LM Studio vision API.
+        try:
+            page_images = pdf_to_page_images(str(temporary_path))
+            parsed = parse_resume_from_image_with_lm_studio(page_images, mime_type="image/jpeg")
+            detected_lang = parsed.pop("detected_language", "en") or "en"
+            if detected_lang.lower() != "en":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"This service only accepts resumes written in English. "
+                        f"Detected language: {detected_lang.upper()}."
+                    ),
+                )
+            return {"status": "COMPLETED", "language": "en",
+                    "resume": parsed,
+                    "warnings": [],
+                    "parserVersion": "1.3.0-lm-studio"}
+        except HTTPException:
+            raise
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
