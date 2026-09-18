@@ -5,6 +5,7 @@ import base64
 import tempfile
 import hmac
 import os
+import requests
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -21,6 +22,9 @@ from parsers import extract_text
 from resume_extractor import clean_text
 
 app = FastAPI(title="Resume Matcher AI Service", version="1.1.0")
+
+
+
 
 
 @app.middleware("http")
@@ -247,3 +251,32 @@ def recommend(request: AnalysisRequest):
 def interview(request: InterviewRequest):
     analysis = analyze_candidate(request.resume_text, request.job_description)
     return {"role": request.role, "questions": analysis["interview_questions"], "modelVersion": "rules-v1"}
+
+@app.get("/test-lm-studio")
+def test_lm_studio():
+    base_url = os.getenv("LM_STUDIO_BASE_URL")
+
+    if not base_url:
+        return {
+            "ok": False,
+            "error": "LM_STUDIO_BASE_URL is missing"
+        }
+
+    try:
+        response = requests.get(
+            f"{base_url.rstrip('/')}/models",
+            timeout=20
+        )
+
+        return {
+            "ok": response.ok,
+            "status_code": response.status_code,
+            "response": response.json()
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "error_type": type(error).__name__,
+            "error": str(error)
+        }
