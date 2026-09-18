@@ -13,7 +13,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from language_service import detect_language, is_english
-from lm_studio_parser import parse_resume_with_lm_studio, parse_resume_from_image_with_lm_studio
+from lm_studio_parser import (
+    parse_resume_with_lm_studio,
+    parse_resume_from_image_with_lm_studio,
+    extract_jd_skills_with_lm_studio,
+)
 from parsers import extract_text, ScannedPDFError, pdf_to_page_images
 
 app = FastAPI(title="Resume Matcher AI Service", version="2.0.0")
@@ -152,6 +156,35 @@ async def parse_resume_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Unexpected error during parsing: {error}") from error
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Service 2 — JD Skill Extractor
+# ---------------------------------------------------------------------------
+
+class JobDescriptionRequest(BaseModel):
+    description: str = Field(min_length=1, description="Raw job description text written by the recruiter.")
+
+
+@app.post("/ai/v1/analyze-jd")
+def analyze_jd(request: JobDescriptionRequest):
+    """Extract skills and hiring requirements from a raw job description.
+
+    The LLM identifies every skill, tool, or competency mentioned and tags each
+    with an importance level (HIGH / MEDIUM / LOW) and a category
+    (technical / tool / soft / domain).
+    """
+    try:
+        result = extract_jd_skills_with_lm_studio(request.description)
+        return {
+            "status": "COMPLETED",
+            "modelVersion": "2.0.0-lm-studio",
+            **result,
+        }
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Unexpected error during JD analysis: {error}") from error
 
 
 # ---------------------------------------------------------------------------

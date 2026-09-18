@@ -500,3 +500,163 @@ def parse_resume_from_image_with_lm_studio(
         return normalized
     except ValueError as error:
         raise RuntimeError(f"LM Studio returned invalid resume JSON: {error}") from error
+
+
+# ---------------------------------------------------------------------------
+# JD Skill Extractor
+# ---------------------------------------------------------------------------
+
+def _normalize_jd(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate and clean the raw LLM output for a JD analysis."""
+    jd = value.get("jd") if isinstance(value.get("jd"), dict) else value
+
+    def _importance(v: object) -> str:
+        s = _string(v).upper()
+        return s if s in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
+
+    def _category(v: object) -> str:
+        s = _string(v).lower()
+        return s if s in {"technical", "tool", "soft", "domain"} else "technical"
+
+    skills = []
+    for item in jd.get("skills", []):
+        if not isinstance(item, dict):
+            continue
+        name = _string(item.get("name"))
+        if not name:
+            continue
+        skills.append({
+            "name": name,
+            "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
+            "importance": _importance(item.get("importance")),
+            "category": _category(item.get("category")),
+        })
+
+    return {
+        "jobTitle": _string(jd.get("jobTitle") or jd.get("job_title")),
+        "experienceRequired": _string(jd.get("experienceRequired") or jd.get("experience_required")),
+        "educationRequired": _string(jd.get("educationRequired") or jd.get("education_required")),
+        "skills": skills,
+    }
+
+
+def extract_jd_skills_with_lm_studio(text: str) -> dict[str, Any]:
+    """Extract required skills and job metadata from raw job description text.
+
+    Returns a dict with jobTitle, experienceRequired, educationRequired,
+    and skills (list of name / normalizedName / importance / category).
+    """
+    if not text.strip():
+        raise ValueError("Cannot send empty job description to LM Studio.")
+
+    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if not url:
+        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
+    timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "90"))
+
+    schema = {
+        "jobTitle": "",
+        "experienceRequired": "",
+        "educationRequired": "",
+        "skills": [
+            {
+                "name": "",
+                "importance": "HIGH | MEDIUM | LOW",
+                "category": "technical | tool | soft | domain",
+            }
+        ],
+    }
+
+    prompt = (
+        "Extract structured hiring requirements from the job description below. "
+        "Return ONLY one valid JSON object matching the schema. Rules:\n"
+        "- jobTitle: the role being hired for (e.g. 'Backend Developer').\n"
+        "- experienceRequired: total years expected (e.g. '3+ years'), empty string if not stated.\n"
+        "- educationRequired: minimum degree/field if mentioned, empty string if not stated.\n"
+        "- skills: every distinct skill, technology, tool, or competency mentioned.\n"
+        "  - importance: HIGH if the JD says required/must/mandatory, "
+        "LOW if preferred/nice-to-have/bonus, MEDIUM otherwise.\n"
+        "  - category: 'technical' for languages/frameworks/databases, "
+        "'tool' for specific software/platforms, "
+        "'soft' for interpersonal/communication skills, "
+        "'domain' for industry/business knowledge.\n"
+        "Do not invent skills not present in the text. Do not duplicate skills.\n\n"
+        f"SCHEMA:\n{json.dumps(schema, ensure_ascii=True)}\n\n"
+        f"JOB DESCRIPTION:\n{text[:20000]}"
+    )
+
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise job description analysis service."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+                "max_tokens": 3000,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "jd_extraction",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "jobTitle": {"type": "string"},
+                                "experienceRequired": {"type": "string"},
+                                "educationRequired": {"type": "string"},
+                                "skills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "importance": {
+                                                "type": "string",
+                                                "enum": ["HIGH", "MEDIUM", "LOW"],
+                                            },
+                                            "category": {
+                                                "type": "string",
+                                                "enum": ["technical", "tool", "soft", "domain"],
+                                            },
+                                        },
+                                        "required": ["name", "importance", "category"],
+                                    },
+                                },
+                            },
+                            "required": ["jobTitle", "experienceRequired", "educationRequired", "skills"],
+                        },
+                    },
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        content = message.get("content") or ""
+        if not content.strip():
+            raise ValueError("LM Studio returned no answer content.")
+        if payload["choices"][0].get("finish_reason") == "length":
+            raise ValueError(
+                "LM Studio truncated the JSON response; reduce JD size or increase max_tokens."
+            )
+    except requests.RequestException as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
+    try:
+        return _normalize_jd(_json_from_content(content))
+    except ValueError as error:
+        raise RuntimeError(f"LM Studio returned invalid JD JSON: {error}") from error
