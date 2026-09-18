@@ -4,7 +4,7 @@ Version 1.0.0 uses exact normalized skill overlap (70%) and cosine semantic simi
 
 `POST /train` can calibrate score weights from at least eight independently human-reviewed, labeled resume/JD pairs. It derives matching features from each pair and saves a local `trained_match_model.json`; keep the training data representative, consented, and reviewed for bias. Training labels must be match-quality labels, not automatic hiring outcomes.
 
-Multilingual routing identifies English, Spanish, French, German, and Portuguese using local language markers and normalizes common translated technical skills into shared canonical names. The system returns `und` when it cannot reliably identify a language; in that case treat results as lower confidence.
+Resume parsing supports English text. The API reports the fixed language value `en`.
 
 The evidence engine scores textual support in the supplied resume: a skill mention, action context, and measurable outcome. It does **not** verify that a claim is true. Every extracted claim is explicitly marked as self-reported and needs an authorized external check (such as a work sample, reference, or credential) before it is treated as verified.
 

@@ -38,6 +38,9 @@ def extract_elements_from_unstructured(file_path: str) -> list[dict]:
     content_type = {
         ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".txt": "text/plain",
     }.get(Path(file_path).suffix.lower(), "application/octet-stream")
 
     if "platform-api.transform.unstructured.io" in api_url:
@@ -344,6 +347,15 @@ def extract_text_from_docx_local(file_path: str) -> str:
     return "\n".join(extracted_text).strip()
 
 
+def extract_text_from_image_local(file_path: str) -> str:
+    if pytesseract is None or Image is None:
+        raise ValueError(
+            "This image needs OCR, but the optional OCR dependencies are unavailable."
+        )
+    with Image.open(file_path) as image:
+        return pytesseract.image_to_string(image).strip()
+
+
 def extract_text(file_path: str) -> str:
     path = Path(file_path)
     extension = path.suffix.lower()
@@ -380,8 +392,11 @@ def extract_text(file_path: str) -> str:
             errors="replace"
         ).strip()
 
+    elif extension in {".jpg", ".jpeg"}:
+        return extract_text_from_image_local(file_path)
+
     else:
         raise ValueError(
             "Unsupported file type. "
-            "Only PDF, DOCX and TXT files are supported."
+            "Only PDF, DOCX, JPG, JPEG and TXT files are supported."
         )

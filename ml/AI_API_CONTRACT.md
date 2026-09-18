@@ -6,8 +6,8 @@ For deployment, set `AI_SERVICE_API_KEY` and have Spring Boot send the same valu
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /parse-resume` | Structured, language-aware resume JSON with confidence values. Accepts `resume_text` or base64 file content plus `document_type` (`pdf`, `docx`, `txt`). |
-| `POST /parse-resume-file` | Multipart PDF/DOCX upload for Swagger/manual testing. Uses Unstructured when configured and local extraction as fallback. |
+| `POST /parse-resume` | Structured English resume JSON. Accepts `resume_text` or base64 file content plus `document_type` (`pdf`, `docx`, `jpg`, `jpeg`, `txt`). |
+| `POST /parse-resume-file` | Multipart PDF, DOCX, JPG, JPEG, or TXT upload for Swagger/manual testing. Uses Unstructured when configured and local extraction as fallback. |
 | `POST /analyze-jd` | Normalized required skills and importance. |
 | `POST /generate-embedding` | Embedding with model metadata and dimension. |
 | `POST /match` | Component scores, skills, evidence, explanation, and model version. |

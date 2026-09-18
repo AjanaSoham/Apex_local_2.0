@@ -5,7 +5,7 @@ The AI service is an internal dependency, not a browser-facing API. Configure it
 ## Integration sequence
 
 1. Resume upload stores the original file, sets processing status to `PROCESSING`, and sends extracted text or base64 file content to `POST /ai/v1/parse-resume`.
-2. Persist returned language, parser version, sections, skills, confidence values, and warnings. Set `COMPLETED`, `PARTIAL`, or `FAILED`.
+2. Persist returned language, parser version, sections, skills, and warnings. Set `COMPLETED`, `PARTIAL`, or `FAILED`.
 3. Job creation sends title/description to `POST /ai/v1/analyze-jd`, then persists normalized skills and importance.
 4. Application creation sends the immutable resume text plus job description to `POST /ai/v1/match`. Persist component scores, evidence, model version, matched skills, and missing skills with that application.
 5. Recruiter ranking sorts persisted results after confirming job ownership.

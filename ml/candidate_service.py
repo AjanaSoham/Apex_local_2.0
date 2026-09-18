@@ -1,18 +1,19 @@
 """Candidate-to-job matching orchestration and explainable output."""
 
 from typing import Any
+import unicodedata
 
 from embedding_service import active_model_name
 from evidence_engine import build_evidence_report
 from jd_skill_extractor import extract_jd_skills
-from language_service import detect_language, normalize_text
 from match_model import predict_score
 from matcher import calculate_semantic_similarity, calculate_skill_match
 from skill_extractor import extract_skills
 
 
 def _clean_text(text: str) -> str:
-    return "\n".join(line.strip() for line in normalize_text(text).splitlines() if line.strip())
+    normalized = unicodedata.normalize("NFKC", text).replace("\x00", "")
+    return "\n".join(line.strip() for line in normalized.splitlines() if line.strip())
 
 
 def _recommendation(score: float, missing: list[str]) -> str:
@@ -48,7 +49,7 @@ def analyze_candidate(resume_text: str, job_description: str, candidate_name: st
 
     return {
         "candidate_name": candidate_name,
-        "languages": {"resume": detect_language(resume_text), "job_description": detect_language(job_description)},
+        "language": "en",
         "scores": {"overall": final_score, "skill_match": skill_match["skill_match_score"], "semantic_similarity": round(semantic_similarity * 100, 2), "evidence_score": evidence["evidence_score"]},
         "skills": {"resume": resume_skills, "required": required_skills, **skill_match},
         "evidence": evidence,

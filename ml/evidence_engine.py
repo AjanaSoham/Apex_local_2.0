@@ -11,8 +11,7 @@ OUTCOME_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|users|clients|days|months|
 
 def score_evidence(skill: str, resume_text: str) -> dict[str, object]:
     """Assess whether a claimed skill has contextual, action, or outcome support."""
-    # Match canonical and translated aliases by reusing the skill normalizer on
-    # each line (e.g. Spanish "aprendizaje automático" supports ML).
+    # Match canonical skill names on each line.
     snippets = [line.strip() for line in resume_text.splitlines() if skill in extract_skills(line)][:3]
     action_support = any(any(word in snippet.lower() for word in ACTION_WORDS) for snippet in snippets)
     outcome_support = any(OUTCOME_PATTERN.search(snippet) for snippet in snippets)

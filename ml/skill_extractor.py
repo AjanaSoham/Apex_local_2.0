@@ -84,19 +84,6 @@ SKILL_ALIASES = {
 
     "communication": "Communication",
     "problem solving": "Problem Solving",
-    # Common translated forms. Canonical output remains language-independent.
-    "aprendizaje automatico": "Machine Learning",
-    "aprendizaje automático": "Machine Learning",
-    "inteligencia artificial": "Artificial Intelligence",
-    "analisis de datos": "Data Analysis",
-    "análisis de datos": "Data Analysis",
-    "apprentissage automatique": "Machine Learning",
-    "intelligence artificielle": "Artificial Intelligence",
-    "analyse de donnees": "Data Analysis",
-    "analyse de données": "Data Analysis",
-    "maschinelles lernen": "Machine Learning",
-    "kunstliche intelligenz": "Artificial Intelligence",
-    "künstliche intelligenz": "Artificial Intelligence",
 }
 
 

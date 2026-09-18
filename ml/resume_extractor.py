@@ -220,12 +220,12 @@ def extract_resume(file_path: str) -> dict:
             f"Resume file not found: {file_path}"
         )
 
-    supported_extensions = [".pdf", ".docx", ".txt"]
+    supported_extensions = [".pdf", ".docx", ".jpg", ".jpeg", ".txt"]
 
     if path.suffix.lower() not in supported_extensions:
         raise ValueError(
             "Unsupported file type. "
-            "Only PDF, DOCX & TXT files are supported."
+            "Only PDF, DOCX, JPG, JPEG & TXT files are supported."
         )
 
     raw_text = extract_text(str(path))

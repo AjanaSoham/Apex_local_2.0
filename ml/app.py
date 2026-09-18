@@ -16,7 +16,6 @@ from candidate_service import analyze_candidate
 from candidate_service import chatbot_reply, rank_candidates
 from embedding_service import active_model_name, generate_embedding
 from jd_skill_extractor import extract_jd_skills
-from language_service import detect_language
 from lm_studio_parser import parse_resume_with_lm_studio
 from parsers import extract_text
 from resume_extractor import clean_text
@@ -41,7 +40,7 @@ async def protect_internal_api(request: Request, call_next):
 class ResumeParseRequest(BaseModel):
     resume_text: str | None = None
     file_base64: str | None = None
-    document_type: str = Field(default="txt", pattern="^(pdf|docx|txt)$")
+    document_type: str = Field(default="txt", pattern="^(pdf|docx|txt|jpg|jpeg)$")
     file_name: str = ""
 
 
@@ -52,7 +51,6 @@ class JobAnalysisRequest(BaseModel):
 
 class EmbeddingRequest(BaseModel):
     text: str = Field(min_length=1)
-    language: str | None = None
 
 
 class MatchRequest(BaseModel):
@@ -104,10 +102,9 @@ def _resume_payload(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("No readable text could be extracted from this resume.")
     parsed = parse_resume_with_lm_studio(text)
-    language = detect_language(text)
-    return {"status": "COMPLETED", "language": language["language"], "confidence": language["confidence"],
+    return {"status": "COMPLETED", "language": "en",
             "resume": parsed,
-            "warnings": [] if language["supported"] else ["Language could not be identified confidently."],
+            "warnings": [],
             "parserVersion": "1.3.0-lm-studio"}
 
 
@@ -146,13 +143,24 @@ async def parse_resume_file(file: UploadFile = File(...)):
     allowed_types = {
         "application/pdf": "pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "text/plain": "txt",
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
     }
 
     document_type = allowed_types.get(file.content_type or "")
     if document_type is None:
+        document_type = {
+            ".pdf": "pdf",
+            ".docx": "docx",
+            ".txt": "txt",
+            ".jpg": "jpg",
+            ".jpeg": "jpg",
+        }.get(Path(file.filename or "").suffix.lower())
+    if document_type is None:
         raise HTTPException(
             status_code=415,
-            detail="Only PDF and DOCX files are supported.",
+            detail="Only PDF, DOCX, JPG, JPEG, and TXT files are supported.",
         )
 
     contents = await file.read()
@@ -179,13 +187,13 @@ async def parse_resume_file(file: UploadFile = File(...)):
 @app.post("/ai/v1/analyze-jd")
 def analyze_jd(request: JobAnalysisRequest):
     skills = extract_jd_skills(request.description)
-    return {"title": request.title, "requiredSkills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "importance": _importance(skill, request.description)} for skill in skills], "experienceRequired": None, "language": detect_language(request.description)["language"], "modelVersion": "skill-taxonomy-v1"}
+    return {"title": request.title, "requiredSkills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "importance": _importance(skill, request.description)} for skill in skills], "experienceRequired": None, "language": "en", "modelVersion": "skill-taxonomy-v1"}
 
 
 @app.post("/ai/v1/generate-embedding")
 def generate_embedding_endpoint(request: EmbeddingRequest):
     vector = generate_embedding(request.text)
-    return {"embedding": vector, "dimension": len(vector), "modelName": active_model_name(), "language": request.language or detect_language(request.text)["language"]}
+    return {"embedding": vector, "dimension": len(vector), "modelName": active_model_name(), "language": "en"}
 
 
 @app.post("/ai/v1/match")
@@ -251,4 +259,3 @@ def recommend(request: AnalysisRequest):
 def interview(request: InterviewRequest):
     analysis = analyze_candidate(request.resume_text, request.job_description)
     return {"role": request.role, "questions": analysis["interview_questions"], "modelVersion": "rules-v1"}
-

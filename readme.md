@@ -1,6 +1,6 @@
 # Resume Matcher AI Service
 
-This repository is the internal Python/FastAPI intelligence service for the AI Resume Screener and Job Matcher. It implements document parsing, language detection, skill extraction and normalization, embeddings, matching, evidence scoring, explanations, recommendations, and interview questions.
+This repository is the internal Python/FastAPI intelligence service for the AI Resume Screener and Job Matcher. It implements English resume parsing, skill extraction and normalization, embeddings, matching, evidence scoring, explanations, recommendations, and interview questions. Supported resume files are PDF, DOCX, JPG, JPEG, and TXT.
 
 The Spring Boot application is the public API gateway and owns users, authentication, authorization, PostgreSQL/pgvector, jobs, applications, file storage, and all candidate/recruiter screens. The frontend must not call this service directly.
 
