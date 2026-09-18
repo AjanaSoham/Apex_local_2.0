@@ -203,6 +203,8 @@ async def parse_resume_file(file: UploadFile = File(...)):
         return _resume_payload(extracted_text)
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Unexpected error during parsing: {error}") from error
     finally:
         temporary_path.unlink(missing_ok=True)
 
@@ -210,13 +212,13 @@ async def parse_resume_file(file: UploadFile = File(...)):
 @app.post("/ai/v1/analyze-jd")
 def analyze_jd(request: JobAnalysisRequest):
     skills = extract_jd_skills(request.description)
-    return {"title": request.title, "requiredSkills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "importance": _importance(skill, request.description)} for skill in skills], "experienceRequired": None, "language": detect_language(request.description)["language"], "modelVersion": "skill-taxonomy-v1"}
+    return {"title": request.title, "requiredSkills": [{"name": skill, "normalizedName": skill.lower().replace(" ", "_"), "importance": _importance(skill, request.description)} for skill in skills], "experienceRequired": None, "language": detect_language(request.description), "modelVersion": "skill-taxonomy-v1"}
 
 
 @app.post("/ai/v1/generate-embedding")
 def generate_embedding_endpoint(request: EmbeddingRequest):
     vector = generate_embedding(request.text)
-    return {"embedding": vector, "dimension": len(vector), "modelName": active_model_name(), "language": request.language or detect_language(request.text)["language"]}
+    return {"embedding": vector, "dimension": len(vector), "modelName": active_model_name(), "language": request.language or detect_language(request.text)}
 
 
 @app.post("/ai/v1/match")
