@@ -680,9 +680,17 @@ def _embedding_url() -> str:
 
 
 def _batch_embed(texts: list[str], model: str, timeout: float) -> list[list[float]] | None:
-    """Batch-fetch embeddings from LM Studio. Returns None on any failure so caller can fall back."""
+    """Batch-fetch embeddings from LM Studio.
+
+    Only attempted when LM_STUDIO_EMBEDDING_MODEL is explicitly set in the environment.
+    Returns None immediately (triggering the name-based fallback) if no embedding model
+    is configured, or if the request fails for any reason.
+    """
+    emb_model = os.getenv("LM_STUDIO_EMBEDDING_MODEL", "").strip()
+    if not emb_model:
+        # No dedicated embedding model configured — skip the network call entirely.
+        return None
     try:
-        emb_model = os.getenv("LM_STUDIO_EMBEDDING_MODEL", model).strip()
         resp = requests.post(
             _embedding_url(),
             headers={"Content-Type": "application/json"},
