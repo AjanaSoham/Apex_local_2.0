@@ -291,36 +291,36 @@ def skill_gap(request: MatchRequest):
 # Service 5 — Interview Question Generator
 # ---------------------------------------------------------------------------
 
-class InterviewQuestionsRequest(BaseModel):
-    jobRequirements: dict[str, Any] = Field(
-        description="The full response from /ai/v1/analyze-jd."
-    )
-
-
 @app.post("/ai/v1/interview-questions")
-def interview_questions(request: InterviewQuestionsRequest):
+async def interview_questions(request: Request):
     """Generate a set of expected interview questions for a job role.
 
-    Input is the JD analysis JSON from /ai/v1/analyze-jd.
-    Returns at least 10 questions tailored to the role's skills and seniority,
-    formatted as numbered text for the candidate to read directly.
+    Accepts the raw JD analysis JSON from /ai/v1/analyze-jd directly as the body —
+    no wrapper object needed. Returns at least 10 questions tailored to the role's
+    skills and seniority, formatted as numbered text for the candidate to read.
     """
     try:
-        questions = generate_interview_questions_with_lm_studio(request.jobRequirements)
+        jd = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Request body must be a valid JSON object (the output of /ai/v1/analyze-jd).")
+
+    if not isinstance(jd, dict) or not jd.get("skills"):
+        raise HTTPException(status_code=422, detail="Invalid input: expected a JD analysis object with a 'skills' field.")
+
+    try:
+        questions = generate_interview_questions_with_lm_studio(jd)
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Unexpected error generating interview questions: {error}") from error
 
-    job_title = request.jobRequirements.get("jobTitle") or "the role"
-
-    # Format as numbered plain text
+    job_title = jd.get("jobTitle") or "the role"
     formatted = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, start=1))
 
     return {
         "status": "COMPLETED",
         "jobTitle": job_title,
         "totalQuestions": len(questions),
-        "questionsText": formatted,   # numbered plain text — show this to the candidate
-        "questions": questions,        # raw list — useful for the frontend if needed
+        "questionsText": formatted,
+        "questions": questions,
     }
