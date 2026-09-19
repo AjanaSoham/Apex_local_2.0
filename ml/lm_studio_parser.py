@@ -663,237 +663,224 @@ def extract_jd_skills_with_lm_studio(text: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Candidate–Job Matcher
+# Candidate–Job Matcher (Embedding-based)
 # ---------------------------------------------------------------------------
 
-def _normalize_match(value: dict[str, Any]) -> dict[str, Any]:
-    """Validate and clean the raw LLM match output. Enforces the experience hard gate."""
+_MATCH_THRESHOLD = 0.75  # cosine similarity threshold for a skill to count as matched
+_IMPORTANCE_WEIGHT: dict[str, int] = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
-    def _importance(v: object) -> str:
-        s = _string(v).upper()
-        return s if s in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
 
-    experience_met: bool = bool(value.get("experienceMet", True))
-    education_met: bool = bool(value.get("educationMet", True))
+def _embedding_url() -> str:
+    """Derive the /v1/embeddings URL from the configured LM Studio endpoint."""
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if url:
+        return re.sub(r"/chat/completions$", "/embeddings", url)
+    base = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    return re.sub(r"/models/?$", "/embeddings", base)
 
-    # Hard gate: if experience is not met, force score to 0.
-    raw_score = value.get("overallScore", 0)
+
+def _batch_embed(texts: list[str], model: str, timeout: float) -> list[list[float]] | None:
+    """Batch-fetch embeddings from LM Studio. Returns None on any failure so caller can fall back."""
     try:
-        overall_score = max(0, min(100, int(round(float(raw_score)))))
-    except (TypeError, ValueError):
-        overall_score = 0
-    if not experience_met:
-        overall_score = 0
+        emb_model = os.getenv("LM_STUDIO_EMBEDDING_MODEL", model).strip()
+        resp = requests.post(
+            _embedding_url(),
+            headers={"Content-Type": "application/json"},
+            json={"model": emb_model, "input": texts},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        items = sorted(resp.json()["data"], key=lambda x: x["index"])
+        return [item["embedding"] for item in items]
+    except Exception:
+        return None
 
-    matched_skills = []
-    for item in value.get("matchedSkills", []):
-        if not isinstance(item, dict):
-            continue
-        name = _string(item.get("name"))
-        if not name:
-            continue
-        try:
-            confidence = max(0.0, min(1.0, float(item.get("candidateConfidence", 0.8))))
-        except (TypeError, ValueError):
-            confidence = 0.8
-        matched_skills.append({
-            "name": name,
-            "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
-            "importance": _importance(item.get("importance")),
-            "candidateConfidence": confidence,
-        })
 
-    missing_skills = []
-    for item in value.get("missingSkills", []):
-        if not isinstance(item, dict):
-            continue
-        name = _string(item.get("name"))
-        if not name:
-            continue
-        missing_skills.append({
-            "name": name,
-            "normalizedName": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"),
-            "importance": _importance(item.get("importance")),
-        })
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
 
-    return {
-        "overallScore": overall_score,
-        "experienceMet": experience_met,
-        "educationMet": education_met,
-        "matchedSkills": matched_skills,
-        "missingSkills": missing_skills,
-        "summary": _string(value.get("summary")),
-    }
+
+def _parse_min_years(exp_str: str) -> float:
+    """Extract minimum years from strings like '5-10 years', '3+ years', '0-2 years'."""
+    if not exp_str:
+        return 0.0
+    m = re.search(r"(\d+(?:\.\d+)?)", exp_str.strip())
+    return float(m.group(1)) if m else 0.0
+
+
+def _fallback_similarity(a: str, b: str) -> float:
+    """Name-based similarity fallback when embeddings are unavailable."""
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+    na, nb = norm(a), norm(b)
+    if na == nb:
+        return 1.0
+    if na and nb and (na in nb or nb in na):
+        return 0.85
+    return 0.0
+
+
+def _extract_resume(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Accept both the full parse response (with outer status/resume wrapper) and the inner resume dict."""
+    if "resume" in candidate and isinstance(candidate["resume"], dict):
+        return candidate["resume"]
+    return candidate
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
 def match_candidate_with_lm_studio(
     candidate: dict[str, Any],
     job_requirements: dict[str, Any],
 ) -> dict[str, Any]:
-    """Score a candidate against job requirements using the LLM.
+    """Score a candidate against job requirements using embedding-based skill similarity.
 
-    ``candidate``        — the ``resume`` object returned by the parser.
-    ``job_requirements`` — the full response from ``extract_jd_skills_with_lm_studio``.
+    Accepts both the full parse response (with outer status/language/resume wrapper)
+    and the inner resume object directly.
 
-    Returns overallScore (0–100), experienceMet, educationMet,
-    matchedSkills, missingSkills, and a plain-English summary.
-    Experience is a hard gate: if not met, overallScore is forced to 0.
+    Scoring:
+    - Experience is a hard gate — if not met, overallScore = 0.
+    - Skills (85%): cosine similarity of skill embeddings, weighted by importance and candidate confidence.
+    - Experience surplus (15%): proportional bonus for exceeding the minimum requirement.
+    - Education: informational only — a degree mismatch never reduces the score.
+
+    Falls back to normalised-name matching if the embeddings endpoint is unavailable.
     """
-    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
-    url = os.getenv("LM_STUDIO_URL", "").strip()
-    if not url:
-        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    resume = _extract_resume(candidate)
     model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
     timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "90"))
 
-    # Build compact summaries so we don't blast the context window.
-    candidate_summary = {
-        "name": candidate.get("name", ""),
-        "yearsOfExperience": candidate.get("years_of_experience", 0),
-        "education": [
-            {"degree": e.get("degree", ""), "institution": e.get("institution", "")}
-            for e in candidate.get("education", [])
-        ],
-        "skills": [
-            {"name": s.get("name", ""), "confidence": s.get("confidence", 0.8)}
-            for s in candidate.get("skills", [])
-        ],
+    # --- Education (informational only) ---
+    edu_req = (job_requirements.get("educationRequired") or "").lower()
+    cand_edu_text = " ".join(
+        (e.get("degree") or "") for e in resume.get("education", [])
+    ).lower()
+    edu_met = True
+    if "master" in edu_req and "master" not in cand_edu_text and "phd" not in cand_edu_text and "doctorate" not in cand_edu_text:
+        edu_met = False
+    elif "phd" in edu_req or "doctorate" in edu_req:
+        if "phd" not in cand_edu_text and "doctorate" not in cand_edu_text:
+            edu_met = False
+
+    # --- Experience gate ---
+    min_years = _parse_min_years(job_requirements.get("experienceRequired") or "")
+    candidate_years = float(resume.get("years_of_experience") or 0)
+    experience_met = candidate_years >= min_years
+
+    required_skills: list[dict] = job_requirements.get("skills") or []
+    candidate_skills: list[dict] = resume.get("skills") or []
+
+    if not experience_met:
+        missing = [
+            {"name": s["name"], "normalizedName": _norm_name(s["name"]),
+             "importance": s.get("importance", "MEDIUM").upper()}
+            for s in required_skills if s.get("name")
+        ]
+        return {
+            "overallScore": 0,
+            "experienceMet": False,
+            "educationMet": edu_met,
+            "matchedSkills": [],
+            "missingSkills": missing,
+            "summary": (
+                f"Candidate has {int(candidate_years)} year{'s' if candidate_years != 1 else ''} "
+                f"of experience but the role requires at least {int(min_years)} years."
+            ),
+        }
+
+    # --- Embedding-based skill matching ---
+    req_names = [s.get("name", "") for s in required_skills]
+    cand_names = [s.get("name", "") for s in candidate_skills]
+    cand_confidence: dict[str, float] = {
+        s.get("name", ""): max(0.0, min(1.0, float(s.get("confidence", 0.8) or 0.8)))
+        for s in candidate_skills
     }
 
-    job_summary = {
-        "jobTitle": job_requirements.get("jobTitle", ""),
-        "experienceRequired": job_requirements.get("experienceRequired", ""),
-        "educationRequired": job_requirements.get("educationRequired", ""),
-        "skills": [
-            {
-                "name": s.get("name", ""),
-                "importance": s.get("importance", "MEDIUM"),
-                "category": s.get("category", "technical"),
-            }
-            for s in job_requirements.get("skills", [])
-        ],
-    }
+    req_embeddings: list[list[float]] | None = None
+    cand_embeddings: list[list[float]] | None = None
 
-    output_schema = {
-        "experienceMet": True,
-        "educationMet": True,
-        "overallScore": 0,
-        "matchedSkills": [
-            {"name": "", "importance": "HIGH | MEDIUM | LOW", "candidateConfidence": 0.0}
-        ],
-        "missingSkills": [
-            {"name": "", "importance": "HIGH | MEDIUM | LOW"}
-        ],
-        "summary": "",
-    }
+    if req_names and cand_names:
+        all_embs = _batch_embed(req_names + cand_names, model, timeout)
+        if all_embs:
+            req_embeddings = all_embs[: len(req_names)]
+            cand_embeddings = all_embs[len(req_names) :]
 
-    prompt = (
-        "You are a hiring intelligence system. Score how well the CANDIDATE matches the JOB REQUIREMENTS.\n\n"
-        "SCORING RULES:\n"
-        "1. Experience gate (hard rule): if the candidate's yearsOfExperience is LESS than the minimum "
-        "required years, set experienceMet=false and overallScore=0. No further scoring needed.\n"
-        "2. If experience IS met, compute overallScore (0–100) as follows:\n"
-        "   - Skills (85%): for each required skill, check if it appears in the candidate's skills. "
-        "Weight matched skills by their importance (HIGH=3, MEDIUM=2, LOW=1) and multiply by the "
-        "candidate's confidence for that skill. Divide by the maximum possible weighted score.\n"
-        "   - Experience surplus (15%): proportional bonus for exceeding the minimum experience requirement.\n"
-        "   - Education: set educationMet=true/false for informational purposes ONLY. "
-        "A degree mismatch does NOT reduce overallScore — education is never part of the score calculation.\n"
-        "3. matchedSkills: required skills the candidate has (include candidateConfidence from their profile).\n"
-        "4. missingSkills: required skills the candidate is missing entirely.\n"
-        "5. summary: one concise sentence explaining the result (mention experience gap if not met, "
-        "do NOT mention education mismatch as a score reason).\n\n"
-        f"CANDIDATE:\n{json.dumps(candidate_summary, ensure_ascii=True)}\n\n"
-        f"JOB REQUIREMENTS:\n{json.dumps(job_summary, ensure_ascii=True)}\n\n"
-        f"Return ONLY a JSON object matching this schema:\n{json.dumps(output_schema, ensure_ascii=True)}"
+    matched_skills: list[dict] = []
+    missing_skills: list[dict] = []
+
+    for i, req_skill in enumerate(required_skills):
+        req_name = req_skill.get("name", "")
+        importance = (req_skill.get("importance") or "MEDIUM").upper()
+        if importance not in _IMPORTANCE_WEIGHT:
+            importance = "MEDIUM"
+
+        best_sim = 0.0
+        best_cand_name = ""
+
+        if req_embeddings and cand_embeddings:
+            for j, cand_name in enumerate(cand_names):
+                sim = _cosine(req_embeddings[i], cand_embeddings[j])
+                if sim > best_sim:
+                    best_sim, best_cand_name = sim, cand_name
+        else:
+            for cand_name in cand_names:
+                sim = _fallback_similarity(req_name, cand_name)
+                if sim > best_sim:
+                    best_sim, best_cand_name = sim, cand_name
+
+        if best_sim >= _MATCH_THRESHOLD and best_cand_name:
+            matched_skills.append({
+                "name": req_name,
+                "normalizedName": _norm_name(req_name),
+                "importance": importance,
+                "candidateConfidence": cand_confidence.get(best_cand_name, 0.8),
+                "similarityScore": round(best_sim, 3),
+            })
+        else:
+            missing_skills.append({
+                "name": req_name,
+                "normalizedName": _norm_name(req_name),
+                "importance": importance,
+            })
+
+    # --- Score computation ---
+    total_weight = sum(_IMPORTANCE_WEIGHT.get(s.get("importance", "MEDIUM").upper(), 2) for s in required_skills)
+    matched_weight = sum(
+        _IMPORTANCE_WEIGHT.get(s["importance"], 2) * s["candidateConfidence"] * s["similarityScore"]
+        for s in matched_skills
     )
+    skills_score = (matched_weight / total_weight * 100) if total_weight > 0 else 0.0
 
-    response = None
-    try:
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a precise candidate evaluation service."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0,
-                "max_tokens": 3000,
-                "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "match_result",
-                        "strict": True,
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "experienceMet": {"type": "boolean"},
-                                "educationMet": {"type": "boolean"},
-                                "overallScore": {"type": "number"},
-                                "matchedSkills": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "properties": {
-                                            "name": {"type": "string"},
-                                            "importance": {
-                                                "type": "string",
-                                                "enum": ["HIGH", "MEDIUM", "LOW"],
-                                            },
-                                            "candidateConfidence": {"type": "number"},
-                                        },
-                                        "required": ["name", "importance", "candidateConfidence"],
-                                    },
-                                },
-                                "missingSkills": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "properties": {
-                                            "name": {"type": "string"},
-                                            "importance": {
-                                                "type": "string",
-                                                "enum": ["HIGH", "MEDIUM", "LOW"],
-                                            },
-                                        },
-                                        "required": ["name", "importance"],
-                                    },
-                                },
-                                "summary": {"type": "string"},
-                            },
-                            "required": [
-                                "experienceMet", "educationMet", "overallScore",
-                                "matchedSkills", "missingSkills", "summary",
-                            ],
-                        },
-                    },
-                },
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        message = payload["choices"][0]["message"]
-        content = message.get("content") or ""
-        if not content.strip():
-            raise ValueError("LM Studio returned no answer content.")
-        if payload["choices"][0].get("finish_reason") == "length":
-            raise ValueError(
-                "LM Studio truncated the match JSON; increase max_tokens."
-            )
-    except requests.RequestException as error:
-        detail = response.text[:300].strip() if response is not None else str(error)
-        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
-    except (ValueError, KeyError, IndexError, TypeError) as error:
-        detail = response.text[:300].strip() if response is not None else str(error)
-        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
-    try:
-        return _normalize_match(_json_from_content(content))
-    except ValueError as error:
-        raise RuntimeError(f"LM Studio returned invalid match JSON: {error}") from error
+    exp_surplus_ratio = min(1.0, (candidate_years - min_years) / max(min_years, 1)) if min_years > 0 else 1.0
+    exp_score = exp_surplus_ratio * 100
+
+    overall_score = min(100, round(0.85 * skills_score + 0.15 * exp_score))
+
+    # --- Summary ---
+    n_matched, n_total = len(matched_skills), len(required_skills)
+    missing_high = [s["name"] for s in missing_skills if s["importance"] == "HIGH"]
+
+    if n_matched == n_total:
+        summary = f"Excellent match: all {n_total} required skills met with {int(candidate_years)} years of experience."
+    elif missing_high:
+        listed = ", ".join(missing_high[:3]) + ("..." if len(missing_high) > 3 else "")
+        summary = f"{n_matched}/{n_total} required skills matched; missing critical skills: {listed}."
+    elif missing_skills:
+        listed = ", ".join(s["name"] for s in missing_skills[:3]) + ("..." if len(missing_skills) > 3 else "")
+        summary = f"{n_matched}/{n_total} required skills matched; missing: {listed}."
+    else:
+        summary = f"{n_matched}/{n_total} required skills matched with {int(candidate_years)} years of experience."
+
+    return {
+        "overallScore": overall_score,
+        "experienceMet": True,
+        "educationMet": edu_met,
+        "matchedSkills": matched_skills,
+        "missingSkills": missing_skills,
+        "summary": summary,
+    }
