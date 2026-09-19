@@ -892,3 +892,119 @@ def match_candidate_with_lm_studio(
         "missingSkills": missing_skills,
         "summary": summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Interview Question Generator
+# ---------------------------------------------------------------------------
+
+def generate_interview_questions_with_lm_studio(jd_analysis: dict[str, Any]) -> list[str]:
+    """Generate at least 10 interview questions for a job role using the LLM.
+
+    ``jd_analysis`` is the full response from ``extract_jd_skills_with_lm_studio``.
+    Returns a plain list of question strings — the caller handles numbering/formatting.
+    """
+    base_url = os.getenv("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).strip()
+    url = os.getenv("LM_STUDIO_URL", "").strip()
+    if not url:
+        url = re.sub(r"/models/?$", "/chat/completions", base_url)
+    model = os.getenv("LM_STUDIO_MODEL", DEFAULT_MODEL).strip()
+    timeout = float(os.getenv("LM_STUDIO_TIMEOUT", "120"))
+
+    job_title = _string(jd_analysis.get("jobTitle")) or "the role"
+    exp_required = _string(jd_analysis.get("experienceRequired"))
+    edu_required = _string(jd_analysis.get("educationRequired"))
+
+    # Build a concise skill list for the prompt, prioritising HIGH importance
+    skills = jd_analysis.get("skills") or []
+    high_skills   = [s["name"] for s in skills if s.get("importance") == "HIGH"  and s.get("name")]
+    medium_skills = [s["name"] for s in skills if s.get("importance") == "MEDIUM" and s.get("name")]
+    low_skills    = [s["name"] for s in skills if s.get("importance") == "LOW"    and s.get("name")]
+
+    skill_lines = []
+    if high_skills:
+        skill_lines.append(f"Required (must-have): {', '.join(high_skills)}")
+    if medium_skills:
+        skill_lines.append(f"Important: {', '.join(medium_skills)}")
+    if low_skills:
+        skill_lines.append(f"Preferred: {', '.join(low_skills)}")
+    skill_block = "\n".join(skill_lines) if skill_lines else "No specific skills listed."
+
+    context_lines = [f"Job Title: {job_title}"]
+    if exp_required:
+        context_lines.append(f"Experience Required: {exp_required}")
+    if edu_required:
+        context_lines.append(f"Education Required: {edu_required}")
+    context_lines.append(f"Skills:\n{skill_block}")
+    context = "\n".join(context_lines)
+
+    prompt = (
+        f"You are an expert technical interviewer. Generate exactly 12 interview questions for a candidate "
+        f"applying for the following role.\n\n"
+        f"{context}\n\n"
+        f"Requirements for the questions:\n"
+        f"- At least 6 questions must test technical depth on the required skills listed above.\n"
+        f"- At least 2 questions must be scenario/problem-solving based.\n"
+        f"- At least 2 questions must assess past experience and behaviour.\n"
+        f"- Questions must be specific to this role — no generic filler questions.\n"
+        f"- Each question must be a complete, clear sentence ending with a question mark.\n"
+        f"- Return ONLY the questions as a JSON array of strings. No preamble, no numbering, no extra text."
+    )
+
+    response = None
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise technical interview question generator."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.4,   # slight creativity for varied questions
+                "max_tokens": 2000,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "interview_questions",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "questions": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["questions"],
+                        },
+                    },
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = (payload["choices"][0]["message"].get("content") or "").strip()
+        if not content:
+            raise ValueError("LM Studio returned no content.")
+        if payload["choices"][0].get("finish_reason") == "length":
+            raise ValueError("LM Studio truncated the response; increase max_tokens.")
+    except requests.RequestException as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio connection/request failed: {detail}") from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        detail = response.text[:300].strip() if response is not None else str(error)
+        raise RuntimeError(f"LM Studio returned an invalid response: {detail}") from error
+
+    try:
+        raw = _json_from_content(content)
+        questions = [str(q).strip() for q in raw.get("questions", []) if str(q).strip()]
+        if len(questions) < 5:
+            raise ValueError(f"Too few questions returned ({len(questions)}).")
+        return questions
+    except ValueError as error:
+        raise RuntimeError(f"LM Studio returned invalid question JSON: {error}") from error

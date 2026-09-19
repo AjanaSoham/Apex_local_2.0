@@ -18,6 +18,7 @@ from lm_studio_parser import (
     parse_resume_from_image_with_lm_studio,
     extract_jd_skills_with_lm_studio,
     match_candidate_with_lm_studio,
+    generate_interview_questions_with_lm_studio,
 )
 from parsers import extract_text, ScannedPDFError, pdf_to_page_images
 
@@ -285,6 +286,41 @@ def skill_gap(request: MatchRequest):
     }
 
 
+
 # ---------------------------------------------------------------------------
-# New AI services go below this line
+# Service 5 — Interview Question Generator
 # ---------------------------------------------------------------------------
+
+class InterviewQuestionsRequest(BaseModel):
+    jobRequirements: dict[str, Any] = Field(
+        description="The full response from /ai/v1/analyze-jd."
+    )
+
+
+@app.post("/ai/v1/interview-questions")
+def interview_questions(request: InterviewQuestionsRequest):
+    """Generate a set of expected interview questions for a job role.
+
+    Input is the JD analysis JSON from /ai/v1/analyze-jd.
+    Returns at least 10 questions tailored to the role's skills and seniority,
+    formatted as numbered text for the candidate to read directly.
+    """
+    try:
+        questions = generate_interview_questions_with_lm_studio(request.jobRequirements)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Unexpected error generating interview questions: {error}") from error
+
+    job_title = request.jobRequirements.get("jobTitle") or "the role"
+
+    # Format as numbered plain text
+    formatted = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, start=1))
+
+    return {
+        "status": "COMPLETED",
+        "jobTitle": job_title,
+        "totalQuestions": len(questions),
+        "questionsText": formatted,   # numbered plain text — show this to the candidate
+        "questions": questions,        # raw list — useful for the frontend if needed
+    }
