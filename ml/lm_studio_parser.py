@@ -18,7 +18,7 @@ DEFAULT_MODEL = "google/gemma-4-e4b"
 GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 )
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+GEMINI_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 
 def _strip_schema_for_gemini(schema: Any) -> Any:
