@@ -15,20 +15,117 @@ load_dotenv(BASE_DIR / ".env")
 DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1/models"
 DEFAULT_MODEL = "google/gemma-4-e4b"
 
-GEMINI_CHAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_GENERATE_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+)
 GEMINI_DEFAULT_MODEL = "gemini-2.0-flash"
 
 
-def _gemini_payload(lm_payload: dict) -> dict:
-    """Strip LM Studio-specific fields and set the Gemini model name."""
-    p = {k: v for k, v in lm_payload.items() if k != "chat_template_kwargs"}
-    p["model"] = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL).strip()
-    # Remove 'strict' from json_schema — Gemini does not support it
-    if "response_format" in p and p["response_format"].get("type") == "json_schema":
-        js = dict(p["response_format"]["json_schema"])
-        js.pop("strict", None)
-        p["response_format"] = {**p["response_format"], "json_schema": js}
-    return p
+def _strip_schema_for_gemini(schema: Any) -> Any:
+    """Recursively remove JSON Schema fields Gemini does not accept."""
+    if isinstance(schema, dict):
+        cleaned = {}
+        for k, v in schema.items():
+            if k in ("additionalProperties", "strict"):
+                continue
+            cleaned[k] = _strip_schema_for_gemini(v)
+        return cleaned
+    if isinstance(schema, list):
+        return [_strip_schema_for_gemini(i) for i in schema]
+    return schema
+
+
+def _call_gemini_native(payload: dict, timeout: float) -> "requests.Response":
+    """Call the native Gemini generateContent API and return an OpenAI-shaped Response.
+
+    Uses the AI Studio key directly as a query parameter — the method that always
+    works with keys from aistudio.google.com.
+    """
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    model = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL).strip()
+    url = GEMINI_GENERATE_URL.format(model=model, key=key)
+
+    # ── Convert OpenAI messages → Gemini contents ────────────────────────────
+    messages = payload.get("messages", [])
+    system_text = ""
+    contents = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        raw_content = msg.get("content", "")
+
+        # Handle multimodal content (list of parts — used by image parser)
+        if isinstance(raw_content, list):
+            parts = []
+            for part in raw_content:
+                if part.get("type") == "text":
+                    parts.append({"text": part["text"]})
+                elif part.get("type") == "image_url":
+                    data_url = part["image_url"]["url"]
+                    # data:image/jpeg;base64,<data>
+                    if data_url.startswith("data:"):
+                        mime, b64 = data_url[5:].split(";base64,", 1)
+                        parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+            if role == "system":
+                # Gemini doesn't support multimodal system messages — skip
+                pass
+            else:
+                contents.append({"role": "user", "parts": parts})
+        else:
+            if role == "system":
+                system_text = raw_content
+            else:
+                gemini_role = "model" if role == "assistant" else "user"
+                contents.append({"role": gemini_role, "parts": [{"text": raw_content}]})
+
+    # ── Build Gemini request body ─────────────────────────────────────────────
+    gen_config: dict[str, Any] = {
+        "temperature": payload.get("temperature", 0),
+        "maxOutputTokens": payload.get("max_tokens", 2000),
+    }
+
+    rf = payload.get("response_format", {})
+    if rf.get("type") == "json_schema":
+        gen_config["responseMimeType"] = "application/json"
+        raw_schema = rf.get("json_schema", {}).get("schema")
+        if raw_schema:
+            gen_config["responseSchema"] = _strip_schema_for_gemini(raw_schema)
+
+    gemini_body: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": gen_config,
+    }
+    if system_text:
+        gemini_body["system_instruction"] = {"parts": [{"text": system_text}]}
+
+    # ── Call Gemini ───────────────────────────────────────────────────────────
+    raw_resp = requests.post(
+        url,
+        headers={"Content-Type": "application/json"},
+        json=gemini_body,
+        timeout=timeout,
+    )
+    raw_resp.raise_for_status()
+    gemini_data = raw_resp.json()
+
+    # ── Wrap response to look like OpenAI — downstream code unchanged ─────────
+    try:
+        text = gemini_data["candidates"][0]["content"]["parts"][0]["text"]
+        finish = gemini_data["candidates"][0].get("finishReason", "STOP")
+    except (KeyError, IndexError) as exc:
+        raise requests.RequestException(
+            f"Gemini returned unexpected response structure: {gemini_data}"
+        ) from exc
+
+    openai_shaped = {
+        "choices": [{
+            "message": {"role": "assistant", "content": text},
+            "finish_reason": "length" if finish == "MAX_TOKENS" else "stop",
+        }]
+    }
+    mock = requests.models.Response()
+    mock.status_code = 200
+    mock._content = json.dumps(openai_shaped).encode("utf-8")
+    return mock
 
 
 def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Response":
@@ -58,19 +155,8 @@ def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Re
 
     print(f"[FALLBACK] LM Studio unavailable ({lm_err}). Retrying with Gemini...")
     try:
-        fallback_resp = requests.post(
-            GEMINI_CHAT_URL,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {key}",
-            },
-            json=_gemini_payload(payload),
-            timeout=timeout,
-        )
-        fallback_resp.raise_for_status()
-        return fallback_resp
+        return _call_gemini_native(payload, timeout)
     except requests.RequestException as gemini_err:
-        # Wrap as a new error that clearly names Gemini, not LM Studio
         raise requests.RequestException(
             f"Both LM Studio and Gemini fallback failed. "
             f"LM Studio: {lm_err}. Gemini: {gemini_err}."
