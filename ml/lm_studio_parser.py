@@ -15,6 +15,57 @@ load_dotenv(BASE_DIR / ".env")
 DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1/models"
 DEFAULT_MODEL = "google/gemma-4-e4b"
 
+GEMINI_CHAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_DEFAULT_MODEL = "gemini-2.0-flash"
+
+
+def _gemini_payload(lm_payload: dict) -> dict:
+    """Strip LM Studio-specific fields and set the Gemini model name."""
+    p = {k: v for k, v in lm_payload.items() if k != "chat_template_kwargs"}
+    p["model"] = os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL).strip()
+    # Remove 'strict' from json_schema — Gemini does not support it
+    if "response_format" in p and p["response_format"].get("type") == "json_schema":
+        js = dict(p["response_format"]["json_schema"])
+        js.pop("strict", None)
+        p["response_format"] = {**p["response_format"], "json_schema": js}
+    return p
+
+
+def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Response":
+    """POST to LM Studio first; on any connection or HTTP failure retry with Gemini.
+
+    The Gemini fallback is only attempted when GEMINI_API_KEY is set in the
+    environment. If the key is absent, the original error is re-raised so the
+    caller's existing error-handling still works normally.
+    """
+    try:
+        resp = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException as primary_err:
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            raise  # No fallback configured — re-raise as before
+        print(f"[FALLBACK] LM Studio unavailable ({primary_err}). Retrying with Gemini...")
+        fallback_resp = requests.post(
+            GEMINI_CHAT_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+            json=_gemini_payload(payload),
+            timeout=timeout,
+        )
+        fallback_resp.raise_for_status()
+        return fallback_resp
+
+
+
 
 def _json_from_content(content: str) -> dict[str, Any]:
     content = content.strip()
@@ -191,10 +242,7 @@ def parse_resume_with_lm_studio(text: str) -> dict[str, Any]:
     )
     response = None
     try:
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
+        payload = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": "You are a precise resume information extraction service."},
@@ -288,9 +336,8 @@ def parse_resume_with_lm_studio(text: str) -> dict[str, Any]:
                         },
                     },
                 },
-            },
-            timeout=timeout,
-        )
+            }
+        response = _call_with_fallback(url, payload, timeout)
         response.raise_for_status()
         payload = response.json()
         message = payload["choices"][0]["message"]
@@ -372,10 +419,7 @@ def parse_resume_from_image_with_lm_studio(
     ]
     response = None
     try:
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
+        payload = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": "You are a precise resume information extraction service."},
@@ -473,9 +517,8 @@ def parse_resume_from_image_with_lm_studio(
                         },
                     },
                 },
-            },
-            timeout=timeout,
-        )
+            }
+        response = _call_with_fallback(url, payload, timeout)
         response.raise_for_status()
         payload = response.json()
         message = payload["choices"][0]["message"]
@@ -589,10 +632,7 @@ def extract_jd_skills_with_lm_studio(text: str) -> dict[str, Any]:
 
     response = None
     try:
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
+        payload = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": "You are a precise job description analysis service."},
@@ -637,9 +677,8 @@ def extract_jd_skills_with_lm_studio(text: str) -> dict[str, Any]:
                         },
                     },
                 },
-            },
-            timeout=timeout,
-        )
+            }
+        response = _call_with_fallback(url, payload, timeout)
         response.raise_for_status()
         payload = response.json()
         message = payload["choices"][0]["message"]
@@ -953,10 +992,7 @@ def generate_interview_questions_with_lm_studio(jd_analysis: dict[str, Any]) -> 
 
     response = None
     try:
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
+        payload = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": "You are a precise technical interview question generator."},
@@ -983,9 +1019,8 @@ def generate_interview_questions_with_lm_studio(jd_analysis: dict[str, Any]) -> 
                         },
                     },
                 },
-            },
-            timeout=timeout,
-        )
+            }
+        response = _call_with_fallback(url, payload, timeout)
         response.raise_for_status()
         payload = response.json()
         content = (payload["choices"][0]["message"].get("content") or "").strip()
