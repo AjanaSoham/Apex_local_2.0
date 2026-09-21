@@ -38,6 +38,7 @@ def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Re
     environment. If the key is absent, the original error is re-raised so the
     caller's existing error-handling still works normally.
     """
+    lm_err = None
     try:
         resp = requests.post(
             url,
@@ -47,11 +48,16 @@ def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Re
         )
         resp.raise_for_status()
         return resp
-    except requests.RequestException as primary_err:
-        key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not key:
-            raise  # No fallback configured — re-raise as before
-        print(f"[FALLBACK] LM Studio unavailable ({primary_err}). Retrying with Gemini...")
+    except requests.RequestException as e:
+        lm_err = e
+
+    # LM Studio failed — check for Gemini fallback
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise lm_err  # No fallback configured — re-raise original error
+
+    print(f"[FALLBACK] LM Studio unavailable ({lm_err}). Retrying with Gemini...")
+    try:
         fallback_resp = requests.post(
             GEMINI_CHAT_URL,
             headers={
@@ -63,6 +69,12 @@ def _call_with_fallback(url: str, payload: dict, timeout: float) -> "requests.Re
         )
         fallback_resp.raise_for_status()
         return fallback_resp
+    except requests.RequestException as gemini_err:
+        # Wrap as a new error that clearly names Gemini, not LM Studio
+        raise requests.RequestException(
+            f"Both LM Studio and Gemini fallback failed. "
+            f"LM Studio: {lm_err}. Gemini: {gemini_err}."
+        ) from gemini_err
 
 
 
