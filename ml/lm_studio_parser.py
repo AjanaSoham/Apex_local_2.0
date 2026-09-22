@@ -1094,7 +1094,7 @@ def generate_interview_questions_with_lm_studio(jd_analysis: dict[str, Any]) -> 
     context = "\n".join(context_lines)
 
     prompt = (
-        f"You are an expert technical interviewer. Generate exactly 12 interview questions for a candidate "
+        f"You are an expert technical interviewer. Generate upto 20 interview questions for a candidate "
         f"applying for the following role.\n\n"
         f"{context}\n\n"
         f"Requirements for the questions:\n"
